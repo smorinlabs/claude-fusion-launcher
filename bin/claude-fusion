@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+# claude-fusion — run Claude Code through OpenRouter Fusion, per a configurable mode.
+set -euo pipefail
+
+CFL_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# shellcheck source=lib/common.sh
+. "$CFL_ROOT/lib/common.sh"
+
+usage() {
+  cat <<EOF
+claude-fusion — run Claude Code with OpenRouter Fusion wired in.
+
+Usage:
+  claude-fusion [--mode MODE] [--key KEY | --key-file FILE] [claude args...]
+
+Modes (defined in config/modes.json; shipped defaults):
+  subagent   main=Opus,  subagents=fusion        (cheapest; fusion = on-demand second opinion) [default]
+  main       main=fusion, subagents=fusion
+  extreme    every tier + subagents = fusion
+  (add or edit modes/models freely in config/modes.json)
+
+Key precedence: --key  >  --key-file FILE  >  \$OPENROUTER_API_KEY
+All other args pass through to 'claude' — e.g.:
+  claude-fusion --mode main                       # interactive
+  claude-fusion --mode subagent -p "design X"     # headless
+
+Run ./setup.sh once first to create your OpenRouter preset (otherwise the
+configured fallback panel is used).
+EOF
+}
+
+mode="subagent"
+key=""
+keyfile=""
+args=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --mode) mode="${2:?--mode needs a value}"; shift 2;;
+    --mode=*) mode="${1#*=}"; shift;;
+    --key) key="${2:?--key needs a value}"; shift 2;;
+    --key=*) key="${1#*=}"; shift;;
+    --key-file) keyfile="${2:?--key-file needs a value}"; shift 2;;
+    --key-file=*) keyfile="${1#*=}"; shift;;
+    -h|--help) usage; exit 0;;
+    --) shift; while [ $# -gt 0 ]; do args+=("$1"); shift; done; break;;
+    *) args+=("$1"); shift;;
+  esac
+done
+
+cfl_require claude curl jq
+cfl_load_config
+settings="$(cfl_render_settings "$mode")"
+key="$(cfl_resolve_key "$key" "$keyfile")"
+
+if [ ! -f "$CFL_PRESET_READY" ]; then
+  cfl_warn "preset not set up — using fallback '$(cfl_cfg '.fallback // "openrouter/fusion"')'. Run ./setup.sh for your custom panel."
+fi
+
+# Run claude with the key scoped to the process (never exported to your shell).
+( unset ANTHROPIC_API_KEY
+  export ANTHROPIC_AUTH_TOKEN="$key"
+  exec claude --settings "$settings" ${args[@]+"${args[@]}"} )

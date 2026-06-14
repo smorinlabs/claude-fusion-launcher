@@ -1,0 +1,5 @@
+{
+  "companyAnnouncements": [
+    "claude-fusion-launcher: run Claude Code through OpenRouter's Fusion multi-model panel. Run ./setup.sh once (creates your cc-fusion preset), then bin/claude-fusion --mode subagent|main|extreme (works interactively and with -p). Dev: just check / just lint / just test. Edit panel models & modes in config/modes.json; see README.md."
+  ]
+}

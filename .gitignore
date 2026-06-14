@@ -1,0 +1,12 @@
+# Never commit secrets or user-specific config.
+
+# Per-user config (a copy of modes.json.example); may name custom models.
+config/modes.json
+
+# Key material / env files.
+*.env
+*.key
+.key
+
+# Stray local settings copies (rendered settings live in $XDG_CONFIG_HOME).
+*.local.json
