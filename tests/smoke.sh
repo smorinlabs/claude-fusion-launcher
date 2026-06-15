@@ -11,7 +11,7 @@ bad()  { note "$1" "FAIL: ${2:-}"; fail=1; }
 
 # 1. shellcheck (if available)
 if command -v shellcheck >/dev/null 2>&1; then
-  if shellcheck bin/claude-fusion setup.sh lib/common.sh tests/smoke.sh; then ok "shellcheck"; else bad "shellcheck"; fi
+  if shellcheck bin/claude-fusion setup.sh lib/common.sh lib/check-openrouter.sh tests/smoke.sh .githooks/pre-commit; then ok "shellcheck"; else bad "shellcheck"; fi
 else
   note "shellcheck" "skipped (not installed)"
 fi
@@ -122,6 +122,12 @@ case "$h_out" in *"Quick start"*) ok "-h help" ;; *) bad "-h help" ;; esac
 
 # 17. doctor runs and reports (no key -> skips account checks; deps may vary in CI)
 if bin/claude-fusion doctor </dev/null >/dev/null 2>&1 || true; then ok "doctor runs"; else bad "doctor runs"; fi
+
+# 18. pre-flight connectivity check: script present/executable, wired into launcher,
+#     and the rendered settings carry NO (non-functional) hooks block.
+if [ -x lib/check-openrouter.sh ]; then ok "pre-flight script executable"; else bad "pre-flight script executable"; fi
+if grep -q 'lib/check-openrouter.sh' bin/claude-fusion; then ok "launcher runs pre-flight"; else bad "launcher runs pre-flight"; fi
+if jq -e 'has("hooks") | not' "$ext_out" >/dev/null 2>&1; then ok "no dead hooks block in settings"; else bad "no dead hooks block in settings"; fi
 
 echo "----"
 [ "$fail" -eq 0 ] && echo "smoke: ALL PASS" || echo "smoke: FAILURES above"

@@ -98,6 +98,10 @@ claude-fusion --help                 # usage
 Repo recipes (`make <t>` / `just <t>`): `check` (deps), `lint` (shellcheck), `test` (no-cost smoke),
 `setup`, `install` (symlink onto PATH, `PREFIX` overridable), `hooks` (enable the gitleaks pre-commit hook).
 
+### Startup connectivity check
+
+Before launching Claude, the launcher runs a fast pre-flight (`lib/check-openrouter.sh`): if OpenRouter is unreachable or your key is rejected, it prints a one-line hint to run `claude-fusion doctor` — so you're not surprised by cryptic mid-session API errors. It's silent on success; disable it with `CFL_SKIP_PRECHECK=1`. (This is a launcher pre-flight rather than a Claude Code SessionStart hook because Claude Code does not execute hooks defined in a `--settings` file.)
+
 ## Cost & latency
 
 Each fusion turn runs N panel models + a judge, so it costs and takes meaningfully more than a single model (panel turns observed ≈ **$0.15–0.35** each vs ~$0.01 for one Opus turn). The default `main` mode fuses every main turn; `subagent` is the cheapest (fusion only on subagent spawns); `extreme` is the most expensive. Keep prompts focused. `--cost` reports a session's actual spend (it waits briefly, with a countdown, for OpenRouter billing to settle).
