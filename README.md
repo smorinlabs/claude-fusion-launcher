@@ -100,7 +100,9 @@ Repo recipes (`make <t>` / `just <t>`): `check` (deps), `lint` (shellcheck), `te
 
 ### Startup connectivity check
 
-Before launching Claude, the launcher runs a fast pre-flight (`lib/check-openrouter.sh`): if OpenRouter is unreachable or your key is rejected, it prints a one-line hint to run `claude-fusion doctor` — so you're not surprised by cryptic mid-session API errors. It's silent on success; disable it with `CFL_SKIP_PRECHECK=1`. (This is a launcher pre-flight rather than a Claude Code SessionStart hook because Claude Code does not execute hooks defined in a `--settings` file.)
+Before launching Claude, the launcher runs a fast pre-flight (`lib/check-openrouter.sh`): if OpenRouter is unreachable or your key is rejected, it prints a one-line hint to run `claude-fusion doctor` — so you're not surprised by cryptic mid-session API errors. It's silent on success; disable it with `CFL_SKIP_PRECHECK=1`.
+
+> Why a pre-flight and not a Claude Code SessionStart hook? Such a hook *does* execute (even from a `--settings` file — verified), but Claude Code currently **discards SessionStart hook output** on new sessions ([anthropics/claude-code#10373](https://github.com/anthropics/claude-code/issues/10373)), so it can't actually show you the warning. A pre-flight prints reliably.
 
 ## Cost & latency
 

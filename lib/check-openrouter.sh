@@ -3,8 +3,9 @@
 # the key is rejected, with a hint to run the doctor. Non-blocking (always exits 0).
 #
 # The launcher runs this just before starting Claude Code. (A SessionStart hook
-# would be nicer, but Claude Code does NOT execute hooks defined in a --settings
-# file — verified on 2.1.177 — so a pre-flight is the reliable way to warn early.)
+# DOES execute — even from a --settings file — but Claude Code currently discards
+# SessionStart hook OUTPUT under --init-only/new sessions (anthropics/claude-code#10373),
+# so it can't show this hint. A pre-flight prints reliably. Verified on 2.1.177.)
 # Skip with CFL_SKIP_PRECHECK=1.
 set -uo pipefail
 

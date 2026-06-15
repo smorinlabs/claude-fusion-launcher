@@ -128,8 +128,9 @@ key="$(cfl_resolve_key "$key" "$keyfile")"
 
 # Pre-flight: warn early (with a doctor hint) if OpenRouter is unreachable or the
 # key is rejected — otherwise the user only finds out via cryptic mid-session errors.
-# (Claude Code can't run this as a SessionStart hook: it ignores hooks from
-# --settings files. Skip with CFL_SKIP_PRECHECK=1.)
+# (A SessionStart hook executes but Claude Code currently discards its output
+# (bug #10373), so it can't show this warning — hence a pre-flight. Skip with
+# CFL_SKIP_PRECHECK=1.)
 if [ -z "${CFL_SKIP_PRECHECK:-}" ] && [ -x "$CFL_ROOT/lib/check-openrouter.sh" ]; then
   OPENROUTER_API_KEY="$key" "$CFL_ROOT/lib/check-openrouter.sh" || true
 fi
