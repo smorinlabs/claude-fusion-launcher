@@ -72,7 +72,7 @@ export OPENROUTER_API_KEY=sk-or-v1-...            # 3. environment variable
 bin/claude-fusion
 ```
 
-The key is injected only as `ANTHROPIC_AUTH_TOKEN` into the `claude` process (a subshell) — it is never written to disk or exported into your interactive shell. Key files are read by grep, not sourced.
+The key is injected only as `ANTHROPIC_AUTH_TOKEN` into the `claude` process (a subshell) — it is never written to disk or exported into your interactive shell. Key files are parsed with `sed`, not sourced.
 
 ## How it works (the research behind it)
 

@@ -120,7 +120,7 @@ cfl_doctor() {
   local key="$1" rc=0
   _d_ok()   { printf '  \xe2\x9c\x93 %s\n' "$1"; }
   _d_no()   { printf '  \xe2\x9c\x97 %s\n' "$1"; [ -n "${2:-}" ] && printf '      \xe2\x86\xb3 %s\n' "$2"; rc=1; }
-  _d_warn() { printf '  \xe2\x9a\xa0 %s\n' "$1"; [ -n "${2:-}" ] && printf '      \xe2\x86\xb3 %s\n' "$2"; }
+  _d_warn() { printf '  \xe2\x9a\xa0 %s\n' "$1"; if [ -n "${2:-}" ]; then printf '      \xe2\x86\xb3 %s\n' "$2"; fi; }
 
   echo "claude-fusion doctor"
   echo "--- environment ---"
