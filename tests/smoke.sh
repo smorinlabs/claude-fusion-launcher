@@ -44,11 +44,27 @@ done
 opus_main="$(jq -r '.env.ANTHROPIC_DEFAULT_OPUS_MODEL' "$XDG_CONFIG_HOME/claude-fusion/main.json")"
 if [ "$opus_main" = "openrouter/fusion" ]; then ok "fusion->fallback (no preset)"; else bad "fusion->fallback (no preset)" "got $opus_main"; fi
 
-# 6. "fusion" keyword resolves to @preset/<slug> once the marker exists
-echo "test" > "$XDG_CONFIG_HOME/claude-fusion/PRESET_READY"
+# 6. "fusion" keyword resolves to @preset/<slug> once the matching marker exists
+echo "preset 'cc-fusion' verified at 2000-01-01T00:00:00Z" > "$XDG_CONFIG_HOME/claude-fusion/PRESET_READY"
 out="$(cfl_render_settings main)"
 opus_main="$(jq -r '.env.ANTHROPIC_DEFAULT_OPUS_MODEL' "$out")"
 if [ "$opus_main" = "@preset/cc-fusion" ]; then ok "fusion->@preset (preset ready)"; else bad "fusion->@preset (preset ready)" "got $opus_main"; fi
+
+# 6b. stale markers for a different preset_slug must not route to @preset/<new-slug>
+stalecfg="$(mktemp)"
+jq '.preset_slug = "cc-fusion-new"' "$CFL_CONFIG" > "$stalecfg"
+old_cfg="$CFL_CONFIG"; CFL_CONFIG="$stalecfg"; stale_out="$(cfl_render_settings main)"; CFL_CONFIG="$old_cfg"
+stale_opus="$(jq -r '.env.ANTHROPIC_DEFAULT_OPUS_MODEL' "$stale_out")"
+if [ "$stale_opus" = "openrouter/fusion" ]; then ok "stale preset marker ignored"; else bad "stale preset marker ignored" "got $stale_opus"; fi
+rm -f "$stalecfg"
+
+# 6c. the top-level default model slot also resolves the "fusion" keyword
+defcfg="$(mktemp)"
+jq '.modes.default_fusion = {"default":"fusion","opus":"~anthropic/claude-opus-latest"}' "$CFL_CONFIG" > "$defcfg"
+old_cfg="$CFL_CONFIG"; CFL_CONFIG="$defcfg"; def_out="$(cfl_render_settings default_fusion)"; CFL_CONFIG="$old_cfg"
+def_model="$(jq -r '.model' "$def_out")"
+if [ "$def_model" = "@preset/cc-fusion" ]; then ok "default slot resolves fusion"; else bad "default slot resolves fusion" "got $def_model"; fi
+rm -f "$defcfg"
 
 # 7. subagent mode keeps a plain Opus main but fusion subagent (re-render now
 #    that PRESET_READY exists, so we don't read the stale fallback render).
@@ -121,13 +137,49 @@ h_out="$(bin/claude-fusion -h 2>/dev/null || true)"
 case "$h_out" in *"Quick start"*) ok "-h help" ;; *) bad "-h help" ;; esac
 
 # 17. doctor runs and reports (no key -> skips account checks; deps may vary in CI)
-if bin/claude-fusion doctor </dev/null >/dev/null 2>&1 || true; then ok "doctor runs"; else bad "doctor runs"; fi
+doc_out="$(bin/claude-fusion doctor </dev/null 2>&1 || true)"
+if [[ "$doc_out" == *"claude-fusion doctor"* && "$doc_out" == *"doctor:"* ]]; then ok "doctor reports"; else bad "doctor reports"; fi
 
 # 18. pre-flight connectivity check: script present/executable, wired into launcher,
 #     and the rendered settings carry NO (non-functional) hooks block.
 if [ -x lib/check-openrouter.sh ]; then ok "pre-flight script executable"; else bad "pre-flight script executable"; fi
 if grep -q 'lib/check-openrouter.sh' bin/claude-fusion; then ok "launcher runs pre-flight"; else bad "launcher runs pre-flight"; fi
 if jq -e 'has("hooks") | not' "$ext_out" >/dev/null 2>&1; then ok "no dead hooks block in settings"; else bad "no dead hooks block in settings"; fi
+
+# 19. Just recipes preserve spaced variadic args and install to $HOME by default.
+fakebin="$tmpstate/fakebin"; mkdir -p "$fakebin"
+cat > "$fakebin/claude" <<'EOS'
+#!/usr/bin/env bash
+printf '%s\n' "$@" > "$CLAUDE_ARGV_OUT"
+EOS
+chmod +x "$fakebin/claude"
+argv_out="$tmpstate/claude-argv.txt"
+if PATH="$fakebin:$PATH" CLAUDE_ARGV_OUT="$argv_out" CFL_SKIP_PRECHECK=1 just --quiet run main --key test -p "hello world" >/dev/null 2>&1 \
+  && grep -Fxq -- "hello world" "$argv_out"; then
+  ok "just run preserves spaced args"
+else
+  bad "just run preserves spaced args" "$(tr '\n' ' ' < "$argv_out" 2>/dev/null || true)"
+fi
+
+setup_dry="$(just --dry-run setup --key-file "space path" 2>&1 || true)"
+doctor_dry="$(just --dry-run doctor --key-file "space path" 2>&1 || true)"
+if [[ "$setup_dry" == *'./setup.sh "$@"'* && "$doctor_dry" == *'bin/claude-fusion doctor "$@"'* ]]; then
+  ok "just setup/doctor forward args safely"
+else
+  bad "just setup/doctor forward args safely"
+fi
+
+install_home="$tmpstate/install-home"
+mkdir -p "$install_home"
+rm -rf "$CFL_ROOT/~"
+if HOME="$install_home" just --quiet install >/dev/null 2>&1 \
+  && [ -L "$install_home/.local/bin/claude-fusion" ] \
+  && [ ! -e "$CFL_ROOT/~/.local/bin/claude-fusion" ]; then
+  ok "just install defaults to HOME"
+else
+  bad "just install defaults to HOME"
+fi
+rm -rf "$CFL_ROOT/~"
 
 echo "----"
 [ "$fail" -eq 0 ] && echo "smoke: ALL PASS" || echo "smoke: FAILURES above"

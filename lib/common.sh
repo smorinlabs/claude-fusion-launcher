@@ -59,11 +59,29 @@ cfl_cfg() { jq -r "$1" "$CFL_CONFIG"; }
 
 # cfl_fusion_ref — the model string the "fusion" keyword resolves to:
 # @preset/<slug> once setup has run, otherwise the configured fallback.
+cfl_preset_marker_slug() {
+  [ -f "$CFL_PRESET_READY" ] || return 1
+  local slug
+  slug="$(jq -r '.preset_slug // empty' "$CFL_PRESET_READY" 2>/dev/null || true)"
+  if [ -z "$slug" ]; then
+    slug="$(sed -nE "s/^preset '([^']+)'.*/\1/p; s/^preset_slug=(.*)$/\1/p" "$CFL_PRESET_READY" | head -1)"
+  fi
+  [ -n "$slug" ] || return 1
+  printf '%s' "$slug"
+}
+
+cfl_preset_ready() {
+  local slug marker_slug
+  slug="$(cfl_cfg '.preset_slug')"
+  marker_slug="$(cfl_preset_marker_slug || true)"
+  [ "$marker_slug" = "$slug" ]
+}
+
 cfl_fusion_ref() {
   local slug fallback
   slug="$(cfl_cfg '.preset_slug')"
   fallback="$(cfl_cfg '.fallback // "openrouter/fusion"')"
-  if [ -f "$CFL_PRESET_READY" ]; then printf '@preset/%s' "$slug"; else printf '%s' "$fallback"; fi
+  if cfl_preset_ready; then printf '@preset/%s' "$slug"; else printf '%s' "$fallback"; fi
 }
 
 # cfl_render_settings <mode> — build a Claude Code settings JSON for the mode and
@@ -81,7 +99,7 @@ cfl_render_settings() {
     def res(v): if v == "fusion" then $fref else v end;
     {
       "$schema": "https://json.schemastore.org/claude-code-settings.json",
-      model: ($m.default // "opus"),
+      model: res($m.default // "opus"),
       env: (
         {
           "ANTHROPIC_API_KEY": "",
@@ -101,8 +119,9 @@ cfl_render_settings() {
 }
 
 # cfl_or_get <key> <path-after-/api/v1> — GET an OpenRouter API endpoint.
-# Prints the JSON body; returns non-zero on HTTP/transport error.
-cfl_or_get() { curl -fsS "$OR_API/$2" -H "Authorization: Bearer $1"; }
+# Prints the JSON body; returns non-zero on HTTP/transport error. Bounded by a
+# timeout so a stalled network can't hang doctor / setup / the --cost poll.
+cfl_or_get() { curl -fsS --connect-timeout 5 --max-time 15 "$OR_API/$2" -H "Authorization: Bearer $1"; }
 
 # cfl_credits_usage <key> — print cumulative account usage ($) as a number.
 cfl_credits_usage() { cfl_or_get "$1" "credits" | jq -r '.data.total_usage // empty'; }
@@ -162,7 +181,7 @@ cfl_doctor() {
         pt="$(printf '%s' "$pinfo" | jq -r '[.data.designated_version.config.tools[]?.type] | index("openrouter:fusion") // empty')"
         if [ "$pm" = "openrouter/fusion" ] && [ -n "$pt" ]; then
           _d_ok "preset '$slug' configured (custom panel)"
-          [ -f "$CFL_PRESET_READY" ] || _d_warn "PRESET_READY marker missing" "run ./setup.sh to write it"
+          cfl_preset_ready || _d_warn "PRESET_READY marker missing or stale" "run ./setup.sh to write it"
         else
           _d_no "preset '$slug' exists but misconfigured (model=$pm)" "re-run ./setup.sh"
         fi

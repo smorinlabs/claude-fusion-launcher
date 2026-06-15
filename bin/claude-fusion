@@ -57,7 +57,20 @@ case "${1:-}" in
     done
     cfl_require jq
     cfl_load_config
-    d_resolved="$(cfl_resolve_key "$d_key" "$d_keyfile" 2>/dev/null || true)"
+    # Resolve leniently: doctor must complete its report even if the key source is
+    # bad (a diagnostic tool shouldn't abort on a missing --key-file).
+    d_resolved=""
+    if [ -n "$d_key" ]; then
+      d_resolved="$d_key"
+    elif [ -n "$d_keyfile" ]; then
+      # cfl_resolve_key exit()s on a bad file; put `|| true` at statement level
+      # (an `|| true` *inside* the $() can't catch an exit, and the failing
+      # substitution would then trip set -e).
+      d_resolved="$(cfl_resolve_key "" "$d_keyfile" 2>/dev/null)" || true
+      [ -n "$d_resolved" ] || cfl_warn "doctor: couldn't read a key from '$d_keyfile' — continuing without account checks"
+    elif [ -n "${OPENROUTER_API_KEY:-}" ]; then
+      d_resolved="$OPENROUTER_API_KEY"
+    fi
     cfl_doctor "$d_resolved"
     exit $?
     ;;
@@ -124,7 +137,7 @@ fi
 
 cfl_require claude curl
 key="$(cfl_resolve_key "$key" "$keyfile")"
-[ -f "$CFL_PRESET_READY" ] || cfl_warn "preset not set up — using fallback '$(cfl_cfg '.fallback // "openrouter/fusion"')'. Run ./setup.sh for your custom panel."
+cfl_preset_ready || cfl_warn "preset not set up for slug '$(cfl_cfg '.preset_slug')' — using fallback '$(cfl_cfg '.fallback // "openrouter/fusion"')'. Run ./setup.sh for your custom panel."
 
 # Pre-flight: warn early (with a doctor hint) if OpenRouter is unreachable or the
 # key is rejected — otherwise the user only finds out via cryptic mid-session errors.
@@ -142,13 +155,15 @@ if [ "$cost" -eq 1 ]; then
   ( unset ANTHROPIC_API_KEY; export ANTHROPIC_AUTH_TOKEN="$key"; claude --settings "$settings" ${args[@]+"${args[@]}"} ) || status=$?
   if [ -n "$before" ]; then
     # OpenRouter usage updates asynchronously — poll until it moves, with a
-    # visible countdown so the user knows how long the wait can take.
-    after="$before"; max=30; waited=0
-    while [ "$waited" -lt "$max" ]; do
+    # visible countdown. Bound by wall-clock (SECONDS), not sleep-count, so a
+    # slow/stalled network can't stretch the wait well past max.
+    after="$before"; max=30; SECONDS=0
+    while [ "$SECONDS" -lt "$max" ]; do
       after="$(cfl_credits_usage "$key" 2>/dev/null || printf '%s' "$before")"
       [ "$after" != "$before" ] && break
-      printf '\rclaude-fusion: waiting for OpenRouter billing to settle… %2ds ' "$((max - waited))" >&2
-      sleep 2; waited=$((waited + 2))
+      rem=$(( max - SECONDS )); if [ "$rem" -lt 0 ]; then rem=0; fi
+      printf '\rclaude-fusion: waiting for OpenRouter billing to settle… %2ds ' "$rem" >&2
+      sleep 2
     done
     printf '\r%*s\r' 60 '' >&2   # clear the countdown line
     if [ "$after" != "$before" ]; then

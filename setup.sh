@@ -72,7 +72,8 @@ has_tool="$(echo "$resp" | jq -r '[.data.designated_version.config.tools[]?.type
 
 if [ "$got_model" = "openrouter/fusion" ] && [ -n "$has_tool" ]; then
   mkdir -p "$CFL_STATE_DIR"
-  echo "preset '$slug' verified at $(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$CFL_PRESET_READY"
+  jq -n --arg preset_slug "$slug" --arg verified_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    '{preset_slug: $preset_slug, verified_at: $verified_at}' > "$CFL_PRESET_READY"
   echo "setup: OK — preset '$slug' created (model=$got_model, fusion tool persisted)."
   echo ""
   echo "Next:"
