@@ -99,3 +99,89 @@ cfl_render_settings() {
     }' > "$out"
   printf '%s' "$out"
 }
+
+# cfl_or_get <key> <path-after-/api/v1> — GET an OpenRouter API endpoint.
+# Prints the JSON body; returns non-zero on HTTP/transport error.
+cfl_or_get() { curl -fsS "$OR_API/$2" -H "Authorization: Bearer $1"; }
+
+# cfl_credits_usage <key> — print cumulative account usage ($) as a number.
+cfl_credits_usage() { cfl_or_get "$1" "credits" | jq -r '.data.total_usage // empty'; }
+
+# cfl_list_modes — print the modes from config with their slot mappings.
+cfl_list_modes() {
+  echo "Modes (config: $CFL_CONFIG):"
+  jq -r '.modes | to_entries[]
+    | "  \(.key): opus=\(.value.opus) sonnet=\(.value.sonnet) haiku=\(.value.haiku) subagent=\(.value.subagent)"' "$CFL_CONFIG"
+  echo "  ('fusion' resolves to: $(cfl_fusion_ref))"
+}
+
+# cfl_doctor <key> — health checks with ✓/✗/⚠ and fix hints. Returns non-zero on ✗.
+cfl_doctor() {
+  local key="$1" rc=0
+  _d_ok()   { printf '  \xe2\x9c\x93 %s\n' "$1"; }
+  _d_no()   { printf '  \xe2\x9c\x97 %s\n' "$1"; [ -n "${2:-}" ] && printf '      \xe2\x86\xb3 %s\n' "$2"; rc=1; }
+  _d_warn() { printf '  \xe2\x9a\xa0 %s\n' "$1"; [ -n "${2:-}" ] && printf '      \xe2\x86\xb3 %s\n' "$2"; }
+
+  echo "claude-fusion doctor"
+  echo "--- environment ---"
+  local t
+  for t in claude curl jq; do
+    if command -v "$t" >/dev/null 2>&1; then _d_ok "$t ($("$t" --version 2>/dev/null | head -1))"; else _d_no "$t missing" "install $t"; fi
+  done
+
+  echo "--- config ---"
+  if [ -f "$CFL_CONFIG" ] && jq -e . "$CFL_CONFIG" >/dev/null 2>&1; then
+    _d_ok "config: $CFL_CONFIG (modes: $(jq -r '.modes|keys|join(", ")' "$CFL_CONFIG"))"
+  else
+    _d_no "config invalid or missing: $CFL_CONFIG" "fix the JSON or copy config/modes.json.example"
+  fi
+
+  echo "--- key & account ---"
+  if [ -z "$key" ]; then
+    _d_warn "no key provided — skipping key/credit/preset checks" "pass --key/--key-file or set OPENROUTER_API_KEY"
+  elif ! command -v curl >/dev/null 2>&1 || ! command -v jq >/dev/null 2>&1; then
+    _d_warn "curl/jq needed for account checks"
+  else
+    local kinfo
+    if kinfo="$(cfl_or_get "$key" "key" 2>/dev/null)"; then
+      _d_ok "key valid (label $(printf '%s' "$kinfo" | jq -r '.data.label // "?"'))"
+      local cred rem use
+      if cred="$(cfl_or_get "$key" "credits" 2>/dev/null)"; then
+        rem="$(printf '%s' "$cred" | jq -r '((.data.total_credits // 0) - (.data.total_usage // 0)) | (.*100|round)/100')"
+        use="$(printf '%s' "$cred" | jq -r '(.data.total_usage // 0) | (.*100|round)/100')"
+        if printf '%s' "$cred" | jq -e '((.data.total_credits // 0) - (.data.total_usage // 0)) > 1' >/dev/null; then
+          _d_ok "credits: \$$rem remaining (used \$$use)"
+        else
+          _d_warn "low credits: \$$rem remaining" "add credits at https://openrouter.ai/settings/credits"
+        fi
+      fi
+      local slug pinfo pm pt
+      slug="$(cfl_cfg '.preset_slug')"
+      if pinfo="$(cfl_or_get "$key" "presets/$slug" 2>/dev/null)"; then
+        pm="$(printf '%s' "$pinfo" | jq -r '.data.designated_version.config.model // empty')"
+        pt="$(printf '%s' "$pinfo" | jq -r '[.data.designated_version.config.tools[]?.type] | index("openrouter:fusion") // empty')"
+        if [ "$pm" = "openrouter/fusion" ] && [ -n "$pt" ]; then
+          _d_ok "preset '$slug' configured (custom panel)"
+          [ -f "$CFL_PRESET_READY" ] || _d_warn "PRESET_READY marker missing" "run ./setup.sh to write it"
+        else
+          _d_no "preset '$slug' exists but misconfigured (model=$pm)" "re-run ./setup.sh"
+        fi
+      else
+        _d_warn "preset '$slug' not found for this key" "run ./setup.sh (launcher uses fallback '$(cfl_cfg '.fallback // "openrouter/fusion"')' until then)"
+      fi
+    else
+      _d_no "OpenRouter rejected the key (GET /api/v1/key failed)" "check the key is valid and not expired"
+    fi
+  fi
+
+  echo "--- claude code env ---"
+  if [ -n "${ANTHROPIC_API_KEY:-}" ]; then
+    _d_warn "ANTHROPIC_API_KEY is set in your shell" "the launcher unsets it per-run, but it can break other claude usage; consider unsetting"
+  else
+    _d_ok "ANTHROPIC_API_KEY not set in shell"
+  fi
+
+  echo
+  if [ "$rc" -eq 0 ]; then echo "doctor: all critical checks passed"; else echo "doctor: problems found (see the failing lines above)"; fi
+  return "$rc"
+}

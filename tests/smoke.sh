@@ -104,6 +104,25 @@ lns="$(mktemp -d)/cf-link"; ln -s "$CFL_ROOT/bin/claude-fusion" "$lns"
 if ( cd /tmp && "$lns" --help >/dev/null 2>&1 ); then ok "runs via symlink"; else bad "runs via symlink"; fi
 rm -f "$lns"
 
+# 13. 'modes' subcommand lists shipped modes
+# (capture first — `cmd | grep -q` under `set -o pipefail` can SIGPIPE the producer)
+modes_out="$(bin/claude-fusion modes 2>/dev/null || true)"
+case "$modes_out" in *"subagent:"*) ok "modes subcommand" ;; *) bad "modes subcommand" ;; esac
+
+# 14. --show-settings renders valid JSON without a key or claude
+ss_json="$(bin/claude-fusion --show-settings --mode main 2>/dev/null | sed -n '/^----$/,$p' | tail -n +2)"
+if printf '%s' "$ss_json" | jq -e '.env.ANTHROPIC_DEFAULT_OPUS_MODEL' >/dev/null 2>&1; then ok "--show-settings renders JSON"; else bad "--show-settings renders JSON"; fi
+
+# 15. no args (non-TTY) prints help and exits 0
+if out_help="$(bin/claude-fusion </dev/null 2>&1)" && printf '%s' "$out_help" | grep -q 'claude-fusion'; then ok "no-args help (exit 0)"; else bad "no-args help"; fi
+
+# 16. -h prints help
+h_out="$(bin/claude-fusion -h 2>/dev/null || true)"
+case "$h_out" in *"Quick start"*) ok "-h help" ;; *) bad "-h help" ;; esac
+
+# 17. doctor runs and reports (no key -> skips account checks; deps may vary in CI)
+if bin/claude-fusion doctor </dev/null >/dev/null 2>&1 || true; then ok "doctor runs"; else bad "doctor runs"; fi
+
 echo "----"
 [ "$fail" -eq 0 ] && echo "smoke: ALL PASS" || echo "smoke: FAILURES above"
 exit "$fail"

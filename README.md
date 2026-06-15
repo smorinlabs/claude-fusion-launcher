@@ -20,12 +20,12 @@ make check   # verifies claude, curl, jq
 # 1. One-time: create your OpenRouter "cc-fusion" preset (the custom 5-model panel)
 ./setup.sh --key-file ~/.config/openrouter.env     # or --key sk-or-v1-...  or  export OPENROUTER_API_KEY=...
 
-# 2. Run Claude Code with fusion
-bin/claude-fusion --mode subagent                  # interactive
-bin/claude-fusion --mode main -p "design a rate limiter"   # headless (-p)
+# 2. Run Claude Code with fusion (default mode = fusion main + fusion subagents)
+bin/claude-fusion -g                                # "just go" — default mode, interactive
+bin/claude-fusion --mode subagent -p "design a rate limiter"   # a lighter mode, headless (-p)
 ```
 
-Add `bin/` to your PATH (or symlink `bin/claude-fusion`) to call it from anywhere.
+Run `claude-fusion` with no arguments for help (and, on a terminal, a y/N prompt to just go). Install it onto your PATH with `make install` (or `just install`).
 
 ## Modes
 
@@ -33,8 +33,8 @@ Modes are defined in `config/modes.json` and are fully editable. Shipped default
 
 | mode | opus tier | sonnet tier | haiku tier | subagents | use it for |
 |------|-----------|-------------|------------|-----------|------------|
-| `subagent` *(default)* | Opus | Sonnet | Haiku | **fusion** | cheap day-to-day; fusion only when a subagent is spawned |
-| `main` | **fusion** | Sonnet | Haiku | **fusion** | every main turn deliberates across the panel |
+| `main` *(default)* | **fusion** | Sonnet | Haiku | **fusion** | the default — fusion is your main model and your subagents |
+| `subagent` | Opus | Sonnet | Haiku | **fusion** | lighter: Opus main, fusion only when a subagent is spawned |
 | `extreme` | **fusion** | **fusion** | **fusion** | **fusion** | everything fusion (slowest/costliest) |
 
 The literal `"fusion"` in any slot resolves to `@preset/<your-slug>` (or the configured `fallback` if you haven't run setup). Any other value is a literal model slug.
@@ -83,9 +83,38 @@ Claude Code points at OpenRouter via `ANTHROPIC_BASE_URL=https://openrouter.ai/a
 - **The Claude Code `advisor` does *not* work through OpenRouter** (it's a server-side Anthropic tool). These profiles disable it (`CLAUDE_CODE_DISABLE_ADVISOR_TOOL=1`); use subagent/main fusion instead.
 - **Presets are created only via** `POST /api/v1/presets/{slug}/chat/completions` (the direct `POST /api/v1/presets` returns 404).
 
+## Commands
+
+```bash
+claude-fusion -g                     # launch the default mode (no other args needed)
+claude-fusion --mode MODE [args…]    # launch a mode; extra args pass to claude (e.g. -p "…")
+claude-fusion modes                  # list modes and their per-slot models
+claude-fusion doctor                 # health check: deps, key, credits, preset, env conflicts
+claude-fusion --show-settings        # print the resolved settings JSON, no launch (a.k.a. --dry-run)
+claude-fusion --cost --mode … -p …   # run, then report the session's OpenRouter spend
+claude-fusion --help                 # usage
+```
+
+Repo recipes (`make <t>` / `just <t>`): `check` (deps), `lint` (shellcheck), `test` (no-cost smoke),
+`setup`, `install` (symlink onto PATH, `PREFIX` overridable), `hooks` (enable the gitleaks pre-commit hook).
+
 ## Cost & latency
 
-Each fusion turn runs N panel models + a judge, so it costs and takes meaningfully more than a single model (panel turns observed ≈ **$0.15–0.35** each vs ~$0.01 for one Opus turn). `subagent` mode is cheapest (fusion only on subagent spawns); `extreme` is the most expensive. Keep prompts focused.
+Each fusion turn runs N panel models + a judge, so it costs and takes meaningfully more than a single model (panel turns observed ≈ **$0.15–0.35** each vs ~$0.01 for one Opus turn). The default `main` mode fuses every main turn; `subagent` is the cheapest (fusion only on subagent spawns); `extreme` is the most expensive. Keep prompts focused. `--cost` reports a session's actual spend (it waits briefly, with a countdown, for OpenRouter billing to settle).
+
+## Troubleshooting
+
+Run `claude-fusion doctor` first — it checks most of these and prints a fix for each. Common cases:
+
+| Symptom | Likely cause / fix |
+|---|---|
+| `preset not set up — using fallback` | You haven't run `./setup.sh` (or you're on a different OpenRouter key/account). Run setup; `doctor` verifies the preset exists for the *current* key. |
+| `OpenRouter rejected the key` | Key wrong/expired, or wrong `--key/--key-file`/`OPENROUTER_API_KEY`. |
+| `insufficient credits` / fusion calls fail | Add credits at <https://openrouter.ai/settings/credits>; `doctor` shows your balance. |
+| model-not-found errors | A panel slug in `config/modes.json` is invalid — check against <https://openrouter.ai/api/v1/models>. |
+| Claude Code ignores the base URL / "model not found" for OpenRouter | A cached Anthropic login or a real `ANTHROPIC_API_KEY` in your shell can interfere. The launcher unsets `ANTHROPIC_API_KEY` per-run; if issues persist, `/logout` in Claude Code and unset the key (`doctor` warns if it's set). |
+| `--cost` prints "no usage change detected" | OpenRouter billing lagged past the ~30s wait; check <https://openrouter.ai/activity>. |
+| advisor never fires | Expected — the Claude Code advisor is a server-side Anthropic tool that doesn't work through OpenRouter; it's disabled in these profiles. Use `main`/`extreme` (fusion main) or `subagent` (fusion subagents) instead. |
 
 ## Development
 

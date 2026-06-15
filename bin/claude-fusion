@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 # claude-fusion — run Claude Code through OpenRouter Fusion, per a configurable mode.
+# The API key is deliberately scoped to subshells so it never leaks into your shell;
+# silence shellcheck's subshell-modification notes for that intentional pattern.
+# shellcheck disable=SC2030,SC2031
 set -euo pipefail
 
 # Resolve $0 through symlinks so the launcher works when symlinked onto PATH.
@@ -13,57 +16,145 @@ CFL_ROOT="$(cd -P "$(dirname "$_src")/.." && pwd)"
 # shellcheck source=lib/common.sh
 . "$CFL_ROOT/lib/common.sh"
 
+# Default = fusion as the main model AND in subagents (you're here for fusion).
+# Lighter alternatives: 'subagent' (Opus main, fusion subagents only), 'extreme' (all tiers fusion).
+DEFAULT_MODE="main"
+
 usage() {
   cat <<EOF
-claude-fusion — run Claude Code with OpenRouter Fusion wired in.
+claude-fusion — run Claude Code through OpenRouter Fusion.
 
-Usage:
-  claude-fusion [--mode MODE] [--key KEY | --key-file FILE] [claude args...]
+Quick start:
+  claude-fusion -g                     launch the default mode ($DEFAULT_MODE)
+  claude-fusion --mode MODE [args…]    launch a mode; extra args go to claude (e.g. -p "…")
+  claude-fusion modes                  list modes
+  claude-fusion doctor                 health checks (deps, key, credits, preset)
 
-Modes (defined in config/modes.json; shipped defaults):
-  subagent   main=Opus,  subagents=fusion        (cheapest; fusion = on-demand second opinion) [default]
-  main       main=fusion, subagents=fusion
-  extreme    every tier + subagents = fusion
-  (add or edit modes/models freely in config/modes.json)
+Options:
+  -g, --go                 launch the default mode ($DEFAULT_MODE), no extra args needed
+  --mode MODE              fusion mode (default: $DEFAULT_MODE) — see 'claude-fusion modes'
+  --key KEY                OpenRouter key      (precedence: --key > --key-file > \$OPENROUTER_API_KEY)
+  --key-file FILE          file with OPENROUTER_API_KEY=…
+  --show-settings, --dry-run   print the resolved settings and exit (no launch)
+  --cost                   report OpenRouter spend for the session (waits briefly for billing to settle)
+  -h, --help               this help
 
-Key precedence: --key  >  --key-file FILE  >  \$OPENROUTER_API_KEY
-All other args pass through to 'claude' — e.g.:
-  claude-fusion --mode main                       # interactive
-  claude-fusion --mode subagent -p "design X"     # headless
-
-Run ./setup.sh once first to create your OpenRouter preset (otherwise the
-configured fallback panel is used).
+Run ./setup.sh once to create your custom-panel preset (otherwise the fallback panel is used).
 EOF
 }
 
-mode="subagent"
+# ---------- subcommands ----------
+case "${1:-}" in
+  doctor)
+    shift
+    d_key="" d_keyfile=""
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --key) d_key="${2:?}"; shift 2;; --key=*) d_key="${1#*=}"; shift;;
+        --key-file) d_keyfile="${2:?}"; shift 2;; --key-file=*) d_keyfile="${1#*=}"; shift;;
+        *) shift;;
+      esac
+    done
+    cfl_require jq
+    cfl_load_config
+    d_resolved="$(cfl_resolve_key "$d_key" "$d_keyfile" 2>/dev/null || true)"
+    cfl_doctor "$d_resolved"
+    exit $?
+    ;;
+  modes)
+    cfl_require jq
+    cfl_load_config
+    cfl_list_modes
+    exit 0
+    ;;
+esac
+
+# ---------- launcher ----------
+mode="$DEFAULT_MODE"
 key=""
 keyfile=""
+go=0
+mode_set=0
+show=0
+cost=0
 args=()
 while [ $# -gt 0 ]; do
   case "$1" in
-    --mode) mode="${2:?--mode needs a value}"; shift 2;;
-    --mode=*) mode="${1#*=}"; shift;;
+    --mode) mode="${2:?--mode needs a value}"; mode_set=1; shift 2;;
+    --mode=*) mode="${1#*=}"; mode_set=1; shift;;
+    -g|--go) go=1; shift;;
     --key) key="${2:?--key needs a value}"; shift 2;;
     --key=*) key="${1#*=}"; shift;;
     --key-file) keyfile="${2:?--key-file needs a value}"; shift 2;;
     --key-file=*) keyfile="${1#*=}"; shift;;
+    --show-settings|--dry-run) show=1; shift;;
+    --cost) cost=1; shift;;
     -h|--help) usage; exit 0;;
     --) shift; while [ $# -gt 0 ]; do args+=("$1"); shift; done; break;;
     *) args+=("$1"); shift;;
   esac
 done
 
-cfl_require claude curl jq
-cfl_load_config
-settings="$(cfl_render_settings "$mode")"
-key="$(cfl_resolve_key "$key" "$keyfile")"
-
-if [ ! -f "$CFL_PRESET_READY" ]; then
-  cfl_warn "preset not set up — using fallback '$(cfl_cfg '.fallback // "openrouter/fusion"')'. Run ./setup.sh for your custom panel."
+# No actionable input -> minimal help; on a TTY, offer to just go.
+if [ "$go" -eq 0 ] && [ "$mode_set" -eq 0 ] && [ "$show" -eq 0 ] && [ ${#args[@]} -eq 0 ]; then
+  usage
+  if [ -t 0 ] && [ -t 1 ]; then
+    printf "\nStart now in the default mode '%s'? [y/N] " "$mode"
+    read -r _ans || _ans=""
+    case "$_ans" in [yY]|[yY][eE][sS]) ;; *) exit 0 ;; esac
+  else
+    exit 0
+  fi
 fi
 
-# Run claude with the key scoped to the process (never exported to your shell).
+cfl_require jq
+cfl_load_config
+settings="$(cfl_render_settings "$mode")"
+
+# Dry run: show what would launch, no key needed, no claude needed.
+if [ "$show" -eq 1 ]; then
+  echo "mode:       $mode"
+  echo "config:     $CFL_CONFIG"
+  echo "fusion ref: $(cfl_fusion_ref)"
+  echo "settings:   $settings"
+  echo "----"
+  jq . "$settings"
+  exit 0
+fi
+
+cfl_require claude curl
+key="$(cfl_resolve_key "$key" "$keyfile")"
+[ -f "$CFL_PRESET_READY" ] || cfl_warn "preset not set up — using fallback '$(cfl_cfg '.fallback // "openrouter/fusion"')'. Run ./setup.sh for your custom panel."
+
+# --cost: measure OpenRouter spend across the session (assumes one session at a time).
+if [ "$cost" -eq 1 ]; then
+  before="$(cfl_credits_usage "$key" 2>/dev/null || true)"
+  status=0
+  ( unset ANTHROPIC_API_KEY; export ANTHROPIC_AUTH_TOKEN="$key"; claude --settings "$settings" ${args[@]+"${args[@]}"} ) || status=$?
+  if [ -n "$before" ]; then
+    # OpenRouter usage updates asynchronously — poll until it moves, with a
+    # visible countdown so the user knows how long the wait can take.
+    after="$before"; max=30; waited=0
+    while [ "$waited" -lt "$max" ]; do
+      after="$(cfl_credits_usage "$key" 2>/dev/null || printf '%s' "$before")"
+      [ "$after" != "$before" ] && break
+      printf '\rclaude-fusion: waiting for OpenRouter billing to settle… %2ds ' "$((max - waited))" >&2
+      sleep 2; waited=$((waited + 2))
+    done
+    printf '\r%*s\r' 60 '' >&2   # clear the countdown line
+    if [ "$after" != "$before" ]; then
+      spent="$(jq -n --argjson a "$after" --argjson b "$before" '(($a - $b) * 10000 | round) / 10000')"
+      printf 'claude-fusion: session cost ~$%s (OpenRouter usage $%s -> $%s)\n' "$spent" "$before" "$after" >&2
+    else
+      printf 'claude-fusion: no usage change detected after ~30s — OpenRouter billing can lag; see https://openrouter.ai/activity\n' >&2
+    fi
+  else
+    cfl_warn "could not read credit balance for the cost report"
+  fi
+  exit "$status"
+fi
+
+# Normal launch: key scoped to the process (never exported to your shell).
 ( unset ANTHROPIC_API_KEY
   export ANTHROPIC_AUTH_TOKEN="$key"
   exec claude --settings "$settings" ${args[@]+"${args[@]}"} )

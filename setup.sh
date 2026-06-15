@@ -26,7 +26,7 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-cfl_require claude curl jq
+cfl_require curl jq
 
 # Defaults ship in config/modes.json.example and are used automatically. To
 # customize, copy it to config/modes.json and edit; that override wins here too.
@@ -34,6 +34,17 @@ cfl_load_config
 echo "setup: using config $CFL_CONFIG"
 
 key="$(cfl_resolve_key "$key" "$keyfile")"
+
+# Validate the key up front (clear failure instead of a cryptic preset error).
+if kinfo="$(cfl_or_get "$key" "key" 2>/dev/null)"; then
+  echo "setup: key OK (label $(printf '%s' "$kinfo" | jq -r '.data.label // "?"'))"
+  if cred="$(cfl_or_get "$key" "credits" 2>/dev/null)"; then
+    echo "setup: credits \$$(printf '%s' "$cred" | jq -r '((.data.total_credits//0)-(.data.total_usage//0))|(.*100|round)/100') remaining"
+  fi
+else
+  cfl_die "OpenRouter rejected the key — check it is valid and not expired (via --key / --key-file / OPENROUTER_API_KEY)"
+fi
+
 slug="$(cfl_cfg '.preset_slug')"
 judge="$(cfl_cfg '.judge_model')"
 panel="$(jq -c '.panel_models' "$CFL_CONFIG")"
@@ -71,6 +82,13 @@ if [ "$got_model" = "openrouter/fusion" ] && [ -n "$has_tool" ]; then
   echo "  bin/claude-fusion --mode subagent -p \"...\"   # headless"
 else
   err="$(echo "$resp" | jq -r '.error.message // "unknown error (see response below)"')"
+  hint=""
+  case "$err" in
+    *redit*|*nsufficient*)                       hint="add credits at https://openrouter.ai/settings/credits";;
+    *nvalid*key*|*uthenticat*|*nauthor*|*xpired*) hint="the OpenRouter key looks invalid or expired";;
+    *not*found*|*o\ endpoints*|*o\ allowed*|*model*) hint="a panel model slug may be wrong — check config/modes.json against https://openrouter.ai/api/v1/models";;
+  esac
   echo "$resp" | jq . >&2 2>/dev/null || echo "$resp" >&2
+  [ -n "$hint" ] && cfl_warn "hint: $hint"
   cfl_die "preset creation failed: $err"
 fi
