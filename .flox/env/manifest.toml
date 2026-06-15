@@ -1,0 +1,92 @@
+schema-version = "1.12.0"
+
+
+## Install Packages --------------------------------------------------
+##  $ flox install gum  <- puts a package in [install] section below
+##  $ flox search gum   <- search for a package
+##  $ flox show gum     <- show all versions of a package
+## -------------------------------------------------------------------
+[install]
+jq.pkg-path = "jq"
+curl.pkg-path = "curl"
+gitleaks.pkg-path = "gitleaks"
+shellcheck.pkg-path = "shellcheck"
+just.pkg-path = "just"
+claude-code.pkg-path = "claude-code"
+# gum.pkg-path = "gum"
+# gum.version = "^0.14.5"
+
+
+## Environment Variables ---------------------------------------------
+##  ... available for use in the activated environment
+##      as well as [hook], [profile] scripts and [services] below.
+## -------------------------------------------------------------------
+[vars]
+# INTRO_MESSAGE = "It's gettin' Flox in here"
+
+
+## Activation Hook ---------------------------------------------------
+##  ... run by _bash_ shell when you run 'flox activate'.
+## -------------------------------------------------------------------
+[hook]
+on-activate = '''
+  # Put the launcher on PATH (on-activate runs for both interactive and
+  # `flox activate -- cmd`, unlike [profile] which is interactive-only).
+  export PATH="$FLOX_ENV_PROJECT/bin:$PATH"
+  echo "claude-fusion: env ready — claude, curl, jq, shellcheck, just, gitleaks on PATH." >&2
+  echo "claude-fusion: next → ./setup.sh --key-file <key>   then   claude-fusion -g" >&2
+'''
+
+
+## Profile script ----------------------------------------------------
+## ... sourced by _your shell_ when you run 'flox activate'.
+## -------------------------------------------------------------------
+[profile]
+# (PATH for bin/ is set in [hook] on-activate so it applies to non-interactive
+#  `flox activate -- cmd` too. Add interactive-only aliases here if desired.)
+
+
+## Services ---------------------------------------------------------
+##  $ flox services start             <- Starts all services
+##  $ flox services status            <- Status of running services
+##  $ flox activate --start-services  <- Activates & starts all
+## ------------------------------------------------------------------
+[services]
+# myservice.command = "python3 -m http.server"
+
+
+## Include ----------------------------------------------------------
+## ... environments to create a composed environment
+## ------------------------------------------------------------------
+[include]
+# environments = [
+#     { dir = "../common" }
+# ]
+
+
+## Build and publish your own packages ------------------------------
+##  $ flox build
+##  $ flox publish
+## ------------------------------------------------------------------
+[build]
+# [build.myproject]
+# description = "The coolest project ever"
+# version = "0.0.1"
+# command = """
+#   mkdir -p $out/bin
+#   cargo build --release
+#   cp target/release/myproject $out/bin/myproject
+# """
+
+
+## Other Environment Options -----------------------------------------
+[options]
+# Systems this environment is compatible with.
+systems = [
+  "aarch64-darwin",
+  "aarch64-linux",
+  "x86_64-darwin",
+  "x86_64-linux",
+]
+# claude-code ships under an unfree license; allow it so activation works for everyone.
+allow.unfree = true

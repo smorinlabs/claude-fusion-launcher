@@ -35,6 +35,18 @@ That's it. The default mode runs fusion as your main model and in subagents.
 - `claude-fusion` with no arguments — prints help (and, in a terminal, offers to just go).
 - `claude-fusion doctor` — checks your key, credits, preset, and environment if anything's off.
 
+### Or use Flox (reproducible, zero manual installs)
+
+[Flox](https://flox.dev) gives you Claude Code **and** every dependency — pinned — in one step, so there's nothing to install by hand:
+
+```bash
+flox activate          # first run fetches claude, curl, jq, shellcheck, just, gitleaks (pinned)
+./setup.sh --key-file ~/.config/openrouter.env
+claude-fusion -g       # already on your PATH inside the env
+```
+
+The environment is defined in `.flox/env/manifest.toml` — edit it and re-`flox activate` to change tools or versions.
+
 ---
 
 ## Modes
