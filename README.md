@@ -1,136 +1,159 @@
 # claude-fusion-launcher
 
-Run **Claude Code** through **OpenRouter's [Fusion](https://openrouter.ai/docs/guides/routing/routers/fusion-router) router** — a multi-model panel that answers in parallel and is synthesized by a judge model — wired in as your main model, as a subagent "second opinion", or everywhere.
+**Run Claude Code on a panel of models instead of one.**
 
-One-time setup creates your own OpenRouter preset (a custom 5-model panel); then a single launcher runs Claude Code with fusion wired in per a configurable **mode**, in both interactive and `claude -p` modes.
+This launcher points Claude Code at [OpenRouter Fusion](https://openrouter.ai/docs/guides/routing/routers/fusion-router): several frontier models answer in parallel and a judge model merges them into one stronger answer. Same Claude Code you already use — better answers on hard problems.
 
-## Requirements
+- **Drop-in.** One command launches Claude Code with fusion wired in. No code changes.
+- **Dial the power.** Fusion as your main model, as subagents only (a cheaper "second opinion"), or everywhere.
+- **Yours to configure.** Your OpenRouter key, your panel of models, your modes.
+- **Interactive or headless.** Works in normal sessions and in `claude -p` one-shots.
 
-- [Claude Code](https://docs.claude.com/en/docs/claude-code) (`claude` on your PATH)
-- An [OpenRouter](https://openrouter.ai) API key (`sk-or-v1-...`)
-- `curl` and `jq`
+---
+
+## Quick start
+
+You need: **Claude Code** (`claude`), an **[OpenRouter](https://openrouter.ai) API key** (`sk-or-v1-…`), and **`curl`** + **`jq`**.
 
 ```bash
-make check   # verifies claude, curl, jq
-```
+# 1. Get it
+git clone https://github.com/smorinlabs/claude-fusion-launcher
+cd claude-fusion-launcher
 
-## Quickstart
+# 2. One-time setup — creates your fusion preset on your own OpenRouter account
+./setup.sh --key-file ~/.config/openrouter.env     # or:  --key sk-or-v1-…   |   export OPENROUTER_API_KEY=…
 
-```bash
-# 1. One-time: create your OpenRouter "cc-fusion" preset (the custom 5-model panel)
-./setup.sh --key-file ~/.config/openrouter.env     # or --key sk-or-v1-...  or  export OPENROUTER_API_KEY=...
-
-# 2. Run Claude Code with fusion (default mode = fusion main + fusion subagents)
+# 3. Launch Claude Code with fusion
 bin/claude-fusion -g                                # "just go" — default mode, interactive
-bin/claude-fusion --mode subagent -p "design a rate limiter"   # a lighter mode, headless (-p)
+bin/claude-fusion -p "design a rate limiter"        # headless one-shot
 ```
 
-Run `claude-fusion` with no arguments for help (and, on a terminal, a y/N prompt to just go). Install it onto your PATH with `make install` (or `just install`).
+That's it. The default mode runs fusion as your main model and in subagents.
+
+**Helpful extras:**
+- `make install` — put `claude-fusion` on your PATH (then drop the `bin/`).
+- `claude-fusion` with no arguments — prints help (and, in a terminal, offers to just go).
+- `claude-fusion doctor` — checks your key, credits, preset, and environment if anything's off.
+
+---
 
 ## Modes
 
-Modes are defined in `config/modes.json` and are fully editable. Shipped defaults:
+A **mode** decides where fusion is used. Pick one with `--mode`; the default is `main`.
 
-| mode | opus tier | sonnet tier | haiku tier | subagents | use it for |
-|------|-----------|-------------|------------|-----------|------------|
-| `main` *(default)* | **fusion** | Sonnet | Haiku | **fusion** | the default — fusion is your main model and your subagents |
-| `subagent` | Opus | Sonnet | Haiku | **fusion** | lighter: Opus main, fusion only when a subagent is spawned |
-| `extreme` | **fusion** | **fusion** | **fusion** | **fusion** | everything fusion (slowest/costliest) |
+| Mode | Main model | Subagents | Best for | Relative cost |
+|------|-----------|-----------|----------|:---:|
+| `main` *(default)* | **fusion** | **fusion** | you want fusion — this is the one | $$ |
+| `subagent` | Opus | **fusion** | cheaper day-to-day; fusion only when Claude spawns a subagent | $ |
+| `extreme` | **fusion** | **fusion** | every tier (Opus/Sonnet/Haiku) + subagents on fusion | $$$ |
 
-The literal `"fusion"` in any slot resolves to `@preset/<your-slug>` (or the configured `fallback` if you haven't run setup). Any other value is a literal model slug.
+```bash
+bin/claude-fusion --mode subagent -p "explain this stack trace"
+claude-fusion modes        # list modes and their exact per-slot models
+```
 
-The shipped `config/modes.json.example` **is** the default — it works out of the box, no config file to create. To change anything, copy it once to `config/modes.json` (that override wins everywhere) and edit — e.g. add your own mode:
+### Customizing modes and the panel
+
+Defaults ship in `config/modes.json.example` and work out of the box — **nothing to create**. To customize, copy it once (the copy wins everywhere) and edit:
 
 ```bash
 cp config/modes.json.example config/modes.json
 ```
-```jsonc
-// config/modes.json
-"modes": {
-  "myteam": { "default": "opus", "opus": "fusion", "sonnet": "deepseek/deepseek-v3.2", "haiku": "~anthropic/claude-haiku-latest", "subagent": "fusion" }
-}
-```
+
+- **Add your own mode.** Each slot is a model slug, or the keyword `"fusion"` (which resolves to your preset):
+  ```jsonc
+  "modes": {
+    "myteam": { "default": "opus", "opus": "fusion", "sonnet": "deepseek/deepseek-v3.2", "haiku": "~anthropic/claude-haiku-latest", "subagent": "fusion" }
+  }
+  ```
+  ```bash
+  bin/claude-fusion --mode myteam -p "..."
+  ```
+- **Change the fusion panel itself** (which models deliberate + the judge), then re-run `./setup.sh`:
+  ```json
+  "panel_models": ["~anthropic/claude-opus-latest","~openai/gpt-latest","~google/gemini-pro-latest","deepseek/deepseek-v3.2","qwen/qwen3-coder-plus"],
+  "judge_model": "~anthropic/claude-opus-latest"
+  ```
+
+---
+
+## Providing your key
+
+Three ways, in precedence order **`--key` > `--key-file` > `$OPENROUTER_API_KEY`**:
+
 ```bash
-bin/claude-fusion --mode myteam -p "..."
-```
-
-Customize the panel itself (models + judge) in `config/modes.json` and re-run `./setup.sh`:
-
-```json
-"panel_models": ["~anthropic/claude-opus-latest","~openai/gpt-latest","~google/gemini-pro-latest","deepseek/deepseek-v3.2","qwen/qwen3-coder-plus"],
-"judge_model": "~anthropic/claude-opus-latest"
-```
-
-## Providing your key (3 ways)
-
-Precedence: **`--key` > `--key-file` > `$OPENROUTER_API_KEY`**.
-
-```bash
-bin/claude-fusion --key sk-or-v1-...             # 1. directly on the command line
+bin/claude-fusion --key sk-or-v1-...             # 1. on the command line
 bin/claude-fusion --key-file ~/.config/or.env    # 2. a file containing OPENROUTER_API_KEY=...
-export OPENROUTER_API_KEY=sk-or-v1-...            # 3. environment variable
-bin/claude-fusion
+export OPENROUTER_API_KEY=sk-or-v1-... && bin/claude-fusion   # 3. environment variable
 ```
 
-The key is injected only as `ANTHROPIC_AUTH_TOKEN` into the `claude` process (a subshell) — it is never written to disk or exported into your interactive shell. Key files are parsed with `sed`, not sourced.
+Your key is injected only as `ANTHROPIC_AUTH_TOKEN` into the `claude` process (in a subshell) — **never written to disk, never exported into your shell.** Key files are parsed with `sed`, not sourced.
 
-## How it works (the research behind it)
-
-Claude Code points at OpenRouter via `ANTHROPIC_BASE_URL=https://openrouter.ai/api`, `ANTHROPIC_AUTH_TOKEN=<key>`, `ANTHROPIC_API_KEY=""`. Fusion is reached through model slugs:
-
-- **Fusion is a server tool, not a model.** `openrouter/fusion` runs a *default* 3-model panel. To run a *custom* panel you need an OpenRouter **preset** whose `config.model` is `openrouter/fusion` plus a `tools:[{type:"openrouter:fusion",parameters:{analysis_models:[…5…],model:<judge>}}]` block with `tool_choice:"required"`. `setup.sh` creates exactly that and references it as `@preset/<slug>`.
-- **`@preset/` works on the Anthropic `/messages` endpoint** Claude Code uses, and **`CLAUDE_CODE_SUBAGENT_MODEL`** routes subagents to it — that's how the `subagent` mode gives you fusion as an on-demand second opinion.
-- **The Claude Code `advisor` does *not* work through OpenRouter** (it's a server-side Anthropic tool). These profiles disable it (`CLAUDE_CODE_DISABLE_ADVISOR_TOOL=1`); use subagent/main fusion instead.
-- **Presets are created only via** `POST /api/v1/presets/{slug}/chat/completions` (the direct `POST /api/v1/presets` returns 404).
+---
 
 ## Commands
 
 ```bash
 claude-fusion -g                     # launch the default mode (no other args needed)
-claude-fusion --mode MODE [args…]    # launch a mode; extra args pass to claude (e.g. -p "…")
+claude-fusion --mode MODE [args…]    # launch a mode; extra args pass through to claude (e.g. -p "…")
 claude-fusion modes                  # list modes and their per-slot models
 claude-fusion doctor                 # health check: deps, key, credits, preset, env conflicts
-claude-fusion --show-settings        # print the resolved settings JSON, no launch (a.k.a. --dry-run)
-claude-fusion --cost --mode … -p …   # run, then report the session's OpenRouter spend
+claude-fusion --show-settings        # print the resolved settings JSON, no launch (alias: --dry-run)
+claude-fusion --cost --mode … -p …   # run, then report what that session cost on OpenRouter
 claude-fusion --help                 # usage
 ```
 
-Repo recipes (`make <t>` / `just <t>`): `check` (deps), `lint` (shellcheck), `test` (no-cost smoke),
-`setup`, `install` (symlink onto PATH, `PREFIX` overridable), `hooks` (enable the gitleaks pre-commit hook).
+Repo tasks (run as `make <t>` or `just <t>`): `check` (verify deps) · `lint` (shellcheck) · `test` (no-cost smoke tests) · `setup` · `install` (symlink onto PATH; `PREFIX` overridable) · `hooks` (enable the gitleaks pre-commit hook). `just all` runs lint + tests.
 
 ### Startup connectivity check
 
-Before launching Claude, the launcher runs a fast pre-flight (`lib/check-openrouter.sh`): if OpenRouter is unreachable or your key is rejected, it prints a one-line hint to run `claude-fusion doctor` — so you're not surprised by cryptic mid-session API errors. It's silent on success; disable it with `CFL_SKIP_PRECHECK=1`.
+Before launching Claude, the launcher runs a fast pre-flight: if OpenRouter is unreachable or your key is rejected, it prints a one-line hint to run `claude-fusion doctor` — so you aren't surprised by cryptic mid-session errors. Silent on success. Disable with `CFL_SKIP_PRECHECK=1`.
 
-> Why a pre-flight and not a Claude Code SessionStart hook? Such a hook *does* execute (even from a `--settings` file — verified), but Claude Code currently **discards SessionStart hook output** on new sessions ([anthropics/claude-code#10373](https://github.com/anthropics/claude-code/issues/10373)), so it can't actually show you the warning. A pre-flight prints reliably.
+---
 
 ## Cost & latency
 
-Each fusion turn runs N panel models + a judge, so it costs and takes meaningfully more than a single model (panel turns observed ≈ **$0.15–0.35** each vs ~$0.01 for one Opus turn). The default `main` mode fuses every main turn; `subagent` is the cheapest (fusion only on subagent spawns); `extreme` is the most expensive. Keep prompts focused. `--cost` reports a session's actual spend (it waits briefly, with a countdown, for OpenRouter billing to settle).
+A fusion turn runs several models plus a judge, so it costs and takes more than a single model — observed roughly **$0.15–0.35 per fusion turn** vs ~$0.01 for one Opus turn. By mode: `subagent` is cheapest (fusion only on subagent spawns), `main` fuses every main turn, `extreme` is the most expensive. Keep prompts focused, and use `--cost` to see a session's actual spend (it waits briefly, with a countdown, for OpenRouter billing to settle).
+
+---
 
 ## Troubleshooting
 
-Run `claude-fusion doctor` first — it checks most of these and prints a fix for each. Common cases:
+Run **`claude-fusion doctor`** first — it checks most of these and prints a fix for each.
 
 | Symptom | Likely cause / fix |
 |---|---|
-| `preset not set up — using fallback` | You haven't run `./setup.sh` (or you're on a different OpenRouter key/account). Run setup; `doctor` verifies the preset exists for the *current* key. |
-| `OpenRouter rejected the key` | Key wrong/expired, or wrong `--key/--key-file`/`OPENROUTER_API_KEY`. |
+| `preset not set up — using fallback` | You haven't run `./setup.sh` (or switched OpenRouter key/account). Run setup; `doctor` verifies the preset exists for the *current* key. |
+| `OpenRouter rejected the key` | Key wrong/expired, or wrong `--key`/`--key-file`/`OPENROUTER_API_KEY`. |
 | `insufficient credits` / fusion calls fail | Add credits at <https://openrouter.ai/settings/credits>; `doctor` shows your balance. |
-| model-not-found errors | A panel slug in `config/modes.json` is invalid — check against <https://openrouter.ai/api/v1/models>. |
-| Claude Code ignores the base URL / "model not found" for OpenRouter | A cached Anthropic login or a real `ANTHROPIC_API_KEY` in your shell can interfere. The launcher unsets `ANTHROPIC_API_KEY` per-run; if issues persist, `/logout` in Claude Code and unset the key (`doctor` warns if it's set). |
-| `--cost` prints "no usage change detected" | OpenRouter billing lagged past the ~30s wait; check <https://openrouter.ai/activity>. |
-| advisor never fires | Expected — the Claude Code advisor is a server-side Anthropic tool that doesn't work through OpenRouter; it's disabled in these profiles. Use `main`/`extreme` (fusion main) or `subagent` (fusion subagents) instead. |
+| `model not found` errors | A panel slug in `config/modes.json` is invalid — check it against <https://openrouter.ai/api/v1/models>. |
+| Claude Code ignores the base URL / "model not found" | A cached Anthropic login or a real `ANTHROPIC_API_KEY` in your shell can interfere. The launcher unsets it per-run; if it persists, `/logout` in Claude Code and unset the key (`doctor` warns if it's set). |
+| `--cost` says "no usage change detected" | OpenRouter billing lagged past the ~30s wait; check <https://openrouter.ai/activity>. |
+| The advisor never fires | Expected — Claude Code's advisor is a server-side Anthropic tool that doesn't work through OpenRouter (it's disabled here). Use `main`/`extreme` (fusion main) or `subagent` (fusion subagents) instead. |
+
+---
+
+## How it works
+
+Claude Code is pointed at OpenRouter via `ANTHROPIC_BASE_URL=https://openrouter.ai/api`, `ANTHROPIC_AUTH_TOKEN=<key>`, `ANTHROPIC_API_KEY=""`. Fusion is reached through model slugs:
+
+- **Fusion is a server tool, not a model.** `openrouter/fusion` runs a *default* 3-model panel. To run a *custom* panel you need an OpenRouter **preset** whose `config.model` is `openrouter/fusion` plus a `tools:[{type:"openrouter:fusion",parameters:{analysis_models:[…],model:<judge>}}]` block with `tool_choice:"required"`. `setup.sh` creates exactly that and the launcher references it as `@preset/<slug>`.
+- **`@preset/` works on the Anthropic `/messages` endpoint** Claude Code uses, and **`CLAUDE_CODE_SUBAGENT_MODEL`** routes subagents to it — that's how `subagent` mode gives you fusion as an on-demand second opinion.
+- **The Claude Code advisor doesn't work through OpenRouter** (server-side Anthropic tool); it's disabled via `CLAUDE_CODE_DISABLE_ADVISOR_TOOL=1`. Fusion reaches you through the main tier and/or subagents instead.
+- **Presets are created only via** `POST /api/v1/presets/{slug}/chat/completions` (the direct `POST /api/v1/presets` returns 404).
+
+The connectivity warning is a launcher pre-flight, not a SessionStart hook: such a hook *does* execute, but Claude Code currently **discards SessionStart hook output** on new sessions ([anthropics/claude-code#10373](https://github.com/anthropics/claude-code/issues/10373)), so it can't show you the warning. A pre-flight prints reliably.
+
+---
 
 ## Development
 
 ```bash
-just check   # deps        (make check)
-just lint    # shellcheck
-just test    # tests/smoke.sh — no API calls
+make check     # verify deps (claude, curl, jq)
+just all       # shellcheck + no-cost smoke tests  (or: just lint / just test)
 ```
 
-CI (GitHub Actions) runs shellcheck, actionlint, and the no-cost smoke tests.
+CI (GitHub Actions) runs shellcheck, actionlint, and the no-cost smoke tests on every push. A gitleaks pre-commit hook is available via `make hooks`.
 
 ## License
 
