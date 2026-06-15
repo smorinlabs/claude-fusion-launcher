@@ -9,13 +9,13 @@ check:
 	echo "deps ok: $(DEPS)"
 
 lint:
-	shellcheck bin/claude-fusion setup.sh lib/common.sh tests/smoke.sh
+	shellcheck bin/claude-fusion setup.sh lib/common.sh lib/check-openrouter.sh tests/smoke.sh .githooks/pre-commit
 
 test:
 	./tests/smoke.sh
 
 setup:
-	./setup.sh
+	./setup.sh $(ARGS)
 
 install:
 	@mkdir -p "$(PREFIX)"

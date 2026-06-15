@@ -12,18 +12,21 @@ check:
 
 # shellcheck all scripts
 lint:
-    shellcheck bin/claude-fusion setup.sh lib/common.sh tests/smoke.sh
+    shellcheck bin/claude-fusion setup.sh lib/common.sh lib/check-openrouter.sh tests/smoke.sh .githooks/pre-commit
 
 # run no-cost smoke tests
 test:
     ./tests/smoke.sh
 
+# run the full local verification suite
+all: lint test
+
 # one-time: create your OpenRouter cc-fusion preset (pass --key/--key-file as needed)
 setup *args:
     ./setup.sh "$@"
 
-# run Claude Code with a fusion mode (default: subagent). e.g. `just run main -p "hi"`
-run mode="subagent" *args:
+# run Claude Code with a fusion mode (default: main). e.g. `just run main -p "hi"`
+run mode="main" *args:
     mode="$1"; shift; bin/claude-fusion --mode "$mode" "$@"
 
 # list available modes

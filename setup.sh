@@ -67,8 +67,8 @@ resp="$(curl -sS "$OR_API/presets/$slug/chat/completions" \
   -H "Content-Type: application/json" \
   -d "$body")"
 
-got_model="$(echo "$resp" | jq -r '.data.designated_version.config.model // empty')"
-has_tool="$(echo "$resp" | jq -r '[.data.designated_version.config.tools[]?.type] | index("openrouter:fusion") // empty')"
+got_model="$(echo "$resp" | jq -r '.data.designated_version.config.model // empty' 2>/dev/null || true)"
+has_tool="$(echo "$resp" | jq -r '[.data.designated_version.config.tools[]?.type] | index("openrouter:fusion") // empty' 2>/dev/null || true)"
 
 if [ "$got_model" = "openrouter/fusion" ] && [ -n "$has_tool" ]; then
   mkdir -p "$CFL_STATE_DIR"
@@ -82,7 +82,7 @@ if [ "$got_model" = "openrouter/fusion" ] && [ -n "$has_tool" ]; then
   echo "  bin/claude-fusion --mode extreme      # everything fusion"
   echo "  bin/claude-fusion --mode subagent -p \"...\"   # headless"
 else
-  err="$(echo "$resp" | jq -r '.error.message // "unknown error (see response below)"')"
+  err="$(echo "$resp" | jq -r '.error.message // "unknown error (see response below)"' 2>/dev/null || echo "unknown error (see response below)")"
   hint=""
   case "$err" in
     *redit*|*nsufficient*)                       hint="add credits at https://openrouter.ai/settings/credits";;

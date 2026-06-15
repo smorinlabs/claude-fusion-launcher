@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # tests/smoke.sh — NO-COST checks (no OpenRouter/Claude API calls).
+# shellcheck disable=SC2030,SC2031
 set -uo pipefail
 
 CFL_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -29,6 +30,19 @@ export XDG_CONFIG_HOME="$tmpstate"
 trap 'rm -rf "$tmpstate"' EXIT
 # shellcheck source=lib/common.sh
 . lib/common.sh
+
+fakebin="$tmpstate/fakebin"; mkdir -p "$fakebin"
+cat > "$fakebin/claude" <<'EOS'
+#!/usr/bin/env bash
+if [ "${1:-}" = "--version" ]; then
+  echo "claude smoke"
+  exit 0
+fi
+if [ -n "${CLAUDE_ARGV_OUT:-}" ]; then
+  printf '%s\n' "$@" > "$CLAUDE_ARGV_OUT"
+fi
+EOS
+chmod +x "$fakebin/claude"
 
 # 4. each shipped mode renders to valid JSON
 for m in subagent main extreme; do
@@ -129,6 +143,9 @@ case "$modes_out" in *"subagent:"*) ok "modes subcommand" ;; *) bad "modes subco
 ss_json="$(bin/claude-fusion --show-settings --mode main 2>/dev/null | sed -n '/^----$/,$p' | tail -n +2)"
 if printf '%s' "$ss_json" | jq -e '.env.ANTHROPIC_DEFAULT_OPUS_MODEL' >/dev/null 2>&1; then ok "--show-settings renders JSON"; else bad "--show-settings renders JSON"; fi
 
+# 14b. unknown modes must fail instead of silently rendering defaults
+if bin/claude-fusion --show-settings --mode bogus >/dev/null 2>&1; then bad "unknown mode rejected"; else ok "unknown mode rejected"; fi
+
 # 15. no args (non-TTY) prints help and exits 0
 if out_help="$(bin/claude-fusion </dev/null 2>&1)" && printf '%s' "$out_help" | grep -q 'claude-fusion'; then ok "no-args help (exit 0)"; else bad "no-args help"; fi
 
@@ -146,19 +163,161 @@ if [ -x lib/check-openrouter.sh ]; then ok "pre-flight script executable"; else 
 if grep -q 'lib/check-openrouter.sh' bin/claude-fusion; then ok "launcher runs pre-flight"; else bad "launcher runs pre-flight"; fi
 if jq -e 'has("hooks") | not' "$ext_out" >/dev/null 2>&1; then ok "no dead hooks block in settings"; else bad "no dead hooks block in settings"; fi
 
-# 19. Just recipes preserve spaced variadic args and install to $HOME by default.
-fakebin="$tmpstate/fakebin"; mkdir -p "$fakebin"
-cat > "$fakebin/claude" <<'EOS'
+# 19. check-openrouter covers key/no-key URL choices and warns non-blockingly.
+prebin="$tmpstate/prebin"; mkdir -p "$prebin"
+cat > "$prebin/curl" <<'EOS'
 #!/usr/bin/env bash
-printf '%s\n' "$@" > "$CLAUDE_ARGV_OUT"
+url=""
+for arg in "$@"; do
+  case "$arg" in https://*) url="$arg" ;; esac
+done
+printf '%s\n' "$url" >> "$CURL_URL_LOG"
+if [ "${CURL_FAIL:-0}" = "1" ]; then exit 7; fi
+exit 0
 EOS
-chmod +x "$fakebin/claude"
+chmod +x "$prebin/curl"
+curl_url_log="$tmpstate/precheck-urls.txt"
+PATH="$prebin:$PATH" CURL_URL_LOG="$curl_url_log" lib/check-openrouter.sh >/dev/null 2>&1
+PATH="$prebin:$PATH" CURL_URL_LOG="$curl_url_log" OPENROUTER_API_KEY=test lib/check-openrouter.sh >/dev/null 2>&1
+pre_fail_out="$(PATH="$prebin:$PATH" CURL_URL_LOG="$curl_url_log" CURL_FAIL=1 OPENROUTER_API_KEY=test lib/check-openrouter.sh 2>&1)"
+if grep -Fxq "https://openrouter.ai/api/v1/models" "$curl_url_log" \
+  && grep -Fxq "https://openrouter.ai/api/v1/key" "$curl_url_log" \
+  && [[ "$pre_fail_out" == *"can't reach"* ]]; then
+  ok "pre-flight checks URL paths"
+else
+  bad "pre-flight checks URL paths" "$(tr '\n' ' ' < "$curl_url_log" 2>/dev/null || true)"
+fi
+
+# 20. Doctor account checks are covered with stubbed OpenRouter responses.
+doctor_ok_out="$(
+  PATH="$fakebin:$PATH"
+  cfl_or_get() {
+    if [ "$2" = "key" ]; then
+      printf '{"data":{"label":"smoke"}}'
+    elif [ "$2" = "credits" ]; then
+      printf '{"data":{"total_credits":1,"total_usage":0.25}}'
+    elif [ "$2" = "presets/cc-fusion" ]; then
+      printf '{"data":{"designated_version":{"config":{"model":"openrouter/fusion","tools":[{"type":"openrouter:fusion"}]}}}}'
+    else
+      return 22
+    fi
+  }
+  cfl_doctor "test"
+)"
+doctor_bad_out="$(
+  PATH="$fakebin:$PATH"
+  cfl_or_get() { return 22; }
+  cfl_doctor "test"
+)"
+if [[ "$doctor_ok_out" == *"key valid"* && "$doctor_ok_out" == *"low credits"* && "$doctor_ok_out" == *"preset 'cc-fusion' configured"* \
+  && "$doctor_bad_out" == *"OpenRouter rejected the key"* ]]; then
+  ok "doctor account branch covered"
+else
+  bad "doctor account branch covered"
+fi
+
+# 21. --cost reports a numeric usage delta with stubbed curl/claude.
+costbin="$tmpstate/costbin"; mkdir -p "$costbin"
+cost_count="$tmpstate/cost-count.txt"; printf '0' > "$cost_count"
+cat > "$costbin/curl" <<'EOS'
+#!/usr/bin/env bash
+url=""
+for arg in "$@"; do
+  case "$arg" in https://*) url="$arg" ;; esac
+done
+case "$url" in
+  */credits)
+    n="$(cat "$COST_COUNT")"
+    if [ "$n" = "0" ]; then
+      printf '1' > "$COST_COUNT"
+      printf '{"data":{"total_usage":1}}'
+    else
+      printf '{"data":{"total_usage":1.25}}'
+    fi
+    ;;
+  *) printf '{"data":{}}' ;;
+esac
+EOS
+cat > "$costbin/claude" <<'EOS'
+#!/usr/bin/env bash
+exit 0
+EOS
+chmod +x "$costbin/curl" "$costbin/claude"
+cost_out="$(PATH="$costbin:$PATH" COST_COUNT="$cost_count" CFL_SKIP_PRECHECK=1 bin/claude-fusion --cost --key test -p hi 2>&1)"
+if [[ "$cost_out" == *"session cost ~\$0.25"* && "$cost_out" == *"OpenRouter usage \$1 -> \$1.25"* ]]; then ok "--cost reports usage delta"; else bad "--cost reports usage delta" "$cost_out"; fi
+
+# 22. Setup reports non-JSON preset responses instead of aborting on jq parse errors.
+setupbin="$tmpstate/setupbin"; mkdir -p "$setupbin"
+cat > "$setupbin/curl" <<'EOS'
+#!/usr/bin/env bash
+url=""
+for arg in "$@"; do
+  case "$arg" in https://*) url="$arg" ;; esac
+done
+case "$url" in
+  */key) printf '{"data":{"label":"smoke"}}' ;;
+  */credits) printf '{"data":{"total_credits":10,"total_usage":1}}' ;;
+  */presets/*/chat/completions) printf '<html>bad gateway</html>' ;;
+  *) printf '{"error":{"message":"unexpected URL"}}' ;;
+esac
+EOS
+chmod +x "$setupbin/curl"
+setup_out="$(PATH="$setupbin:$PATH" XDG_CONFIG_HOME="$tmpstate/setup-state" ./setup.sh --key test 2>&1)"
+setup_rc=$?
+if [ "$setup_rc" -ne 0 ] && [[ "$setup_out" == *'<html>bad gateway</html>'* && "$setup_out" == *'preset creation failed'* && "$setup_out" != *'parse error'* ]]; then
+  ok "setup handles non-JSON preset response"
+else
+  bad "setup handles non-JSON preset response" "$setup_out"
+fi
+
+# 23. gitleaks hook falls back to the older protect --staged syntax.
+gitleaksbin="$tmpstate/gitleaksbin"; mkdir -p "$gitleaksbin"
+gitleaks_log="$tmpstate/gitleaks.log"
+cat > "$gitleaksbin/gitleaks" <<'EOS'
+#!/usr/bin/env bash
+case "$1" in
+  git) echo "unknown command git" >&2; exit 2 ;;
+  protect) printf '%s\n' "$*" >> "$GITLEAKS_LOG"; exit 0 ;;
+  *) exit 2 ;;
+esac
+EOS
+chmod +x "$gitleaksbin/gitleaks"
+if PATH="$gitleaksbin:$PATH" GITLEAKS_LOG="$gitleaks_log" .githooks/pre-commit >/dev/null 2>&1 \
+  && grep -Fxq "protect --staged --no-banner --redact" "$gitleaks_log"; then
+  ok "gitleaks hook supports protect syntax"
+else
+  bad "gitleaks hook supports protect syntax"
+fi
+
+# 24. CI and local recipe entrypoints stay aligned.
+ci_file=".github/workflows/ci.yml"
+if grep -q 'setup-just' "$ci_file" && grep -q 'make check' "$ci_file" && grep -q 'just all' "$ci_file" && grep -q '^all: lint test' justfile; then
+  ok "ci runs declared recipes"
+else
+  bad "ci runs declared recipes"
+fi
+if grep -q 'lib/check-openrouter.sh' justfile && grep -q '.githooks/pre-commit' justfile \
+  && grep -q 'lib/check-openrouter.sh' Makefile && grep -q '.githooks/pre-commit' Makefile; then
+  ok "lint recipes cover shell files"
+else
+  bad "lint recipes cover shell files"
+fi
+
+# 25. Just/Make recipes preserve documented defaults and setup args.
 argv_out="$tmpstate/claude-argv.txt"
 if PATH="$fakebin:$PATH" CLAUDE_ARGV_OUT="$argv_out" CFL_SKIP_PRECHECK=1 just --quiet run main --key test -p "hello world" >/dev/null 2>&1 \
   && grep -Fxq -- "hello world" "$argv_out"; then
   ok "just run preserves spaced args"
 else
   bad "just run preserves spaced args" "$(tr '\n' ' ' < "$argv_out" 2>/dev/null || true)"
+fi
+
+default_argv_out="$tmpstate/default-claude-argv.txt"
+if PATH="$fakebin:$PATH" CLAUDE_ARGV_OUT="$default_argv_out" CFL_SKIP_PRECHECK=1 OPENROUTER_API_KEY=test just --quiet run >/dev/null 2>&1 \
+  && grep -Eq '/main\.json$' "$default_argv_out"; then
+  ok "just run defaults to main"
+else
+  bad "just run defaults to main" "$(tr '\n' ' ' < "$default_argv_out" 2>/dev/null || true)"
 fi
 
 setup_dry="$(just --dry-run setup --key-file "space path" 2>&1 || true)"
@@ -168,6 +327,9 @@ if [[ "$setup_dry" == *'./setup.sh "$@"'* && "$doctor_dry" == *'bin/claude-fusio
 else
   bad "just setup/doctor forward args safely"
 fi
+
+make_setup_dry="$(make -n setup ARGS='--key-file /tmp/key' 2>&1 || true)"
+if [[ "$make_setup_dry" == *'./setup.sh --key-file /tmp/key'* ]]; then ok "make setup forwards ARGS"; else bad "make setup forwards ARGS" "$make_setup_dry"; fi
 
 install_home="$tmpstate/install-home"
 mkdir -p "$install_home"

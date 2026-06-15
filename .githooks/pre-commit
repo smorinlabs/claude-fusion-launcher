@@ -8,7 +8,16 @@ if ! command -v gitleaks >/dev/null 2>&1; then
   exit 0
 fi
 
-if ! gitleaks git --staged --no-banner --redact; then
+git_err="$(mktemp)"
+trap 'rm -f "$git_err"' EXIT
+
+if gitleaks git --staged --no-banner --redact 2>"$git_err"; then
+  exit 0
+elif grep -Eiq 'unknown command|unknown flag|No help topic' "$git_err" \
+  && gitleaks protect --staged --no-banner --redact; then
+  exit 0
+else
+  cat "$git_err" >&2
   echo "pre-commit: gitleaks found potential secrets — commit blocked." >&2
   echo "            review the findings above; to override (rarely): git commit --no-verify" >&2
   exit 1
