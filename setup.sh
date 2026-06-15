@@ -2,7 +2,14 @@
 # setup.sh — one-time per-user setup: create your OpenRouter "cc-fusion" preset.
 set -euo pipefail
 
-CFL_ROOT="$(cd "$(dirname "$0")" && pwd)"
+# Resolve $0 through symlinks so setup works no matter where it's invoked from.
+_src="$0"
+while [ -L "$_src" ]; do
+  _dir="$(cd -P "$(dirname "$_src")" && pwd)"
+  _src="$(readlink "$_src")"
+  case "$_src" in /*) ;; *) _src="$_dir/$_src" ;; esac
+done
+CFL_ROOT="$(cd -P "$(dirname "$_src")" && pwd)"
 # shellcheck source=lib/common.sh
 . "$CFL_ROOT/lib/common.sh"
 
@@ -21,12 +28,10 @@ done
 
 cfl_require claude curl jq
 
-# Seed config from the example on first run.
-if [ ! -f "$CFL_CONFIG" ]; then
-  cp "$CFL_ROOT/config/modes.json.example" "$CFL_CONFIG"
-  echo "setup: created $CFL_CONFIG (edit it to customize panel models or modes)"
-fi
+# Defaults ship in config/modes.json.example and are used automatically. To
+# customize, copy it to config/modes.json and edit; that override wins here too.
 cfl_load_config
+echo "setup: using config $CFL_CONFIG"
 
 key="$(cfl_resolve_key "$key" "$keyfile")"
 slug="$(cfl_cfg '.preset_slug')"

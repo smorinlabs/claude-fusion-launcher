@@ -37,8 +37,13 @@ Modes are defined in `config/modes.json` and are fully editable. Shipped default
 | `main` | **fusion** | Sonnet | Haiku | **fusion** | every main turn deliberates across the panel |
 | `extreme` | **fusion** | **fusion** | **fusion** | **fusion** | everything fusion (slowest/costliest) |
 
-The literal `"fusion"` in any slot resolves to `@preset/<your-slug>` (or the configured `fallback` if you haven't run setup). Any other value is a literal model slug — set any model per slot, or add your own modes:
+The literal `"fusion"` in any slot resolves to `@preset/<your-slug>` (or the configured `fallback` if you haven't run setup). Any other value is a literal model slug.
 
+The shipped `config/modes.json.example` **is** the default — it works out of the box, no config file to create. To change anything, copy it once to `config/modes.json` (that override wins everywhere) and edit — e.g. add your own mode:
+
+```bash
+cp config/modes.json.example config/modes.json
+```
 ```jsonc
 // config/modes.json
 "modes": {

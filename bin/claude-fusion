@@ -2,7 +2,14 @@
 # claude-fusion — run Claude Code through OpenRouter Fusion, per a configurable mode.
 set -euo pipefail
 
-CFL_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# Resolve $0 through symlinks so the launcher works when symlinked onto PATH.
+_src="$0"
+while [ -L "$_src" ]; do
+  _dir="$(cd -P "$(dirname "$_src")" && pwd)"
+  _src="$(readlink "$_src")"
+  case "$_src" in /*) ;; *) _src="$_dir/$_src" ;; esac
+done
+CFL_ROOT="$(cd -P "$(dirname "$_src")/.." && pwd)"
 # shellcheck source=lib/common.sh
 . "$CFL_ROOT/lib/common.sh"
 

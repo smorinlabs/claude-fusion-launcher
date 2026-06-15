@@ -4,7 +4,16 @@
 # shellcheck shell=bash
 
 CFL_ROOT="${CFL_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
-CFL_CONFIG="${CLAUDE_FUSION_CONFIG:-$CFL_ROOT/config/modes.json}"
+CFL_CONFIG_EXAMPLE="$CFL_ROOT/config/modes.json.example"
+# Config resolution (no need to create modes.json — the shipped example IS the
+# default): explicit $CLAUDE_FUSION_CONFIG > user's config/modes.json > example.
+if [ -n "${CLAUDE_FUSION_CONFIG:-}" ]; then
+  CFL_CONFIG="$CLAUDE_FUSION_CONFIG"
+elif [ -f "$CFL_ROOT/config/modes.json" ]; then
+  CFL_CONFIG="$CFL_ROOT/config/modes.json"
+else
+  CFL_CONFIG="$CFL_CONFIG_EXAMPLE"
+fi
 CFL_STATE_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/claude-fusion"
 CFL_PRESET_READY="$CFL_STATE_DIR/PRESET_READY"
 # shellcheck disable=SC2034  # OR_API is used by setup.sh (which sources this file)
@@ -39,9 +48,9 @@ cfl_resolve_key() {
   cfl_die "no OpenRouter key — use --key, --key-file FILE, or export OPENROUTER_API_KEY"
 }
 
-# cfl_load_config — ensure the config exists and is valid JSON.
+# cfl_load_config — ensure the resolved config exists and is valid JSON.
 cfl_load_config() {
-  [ -f "$CFL_CONFIG" ] || cfl_die "config not found: $CFL_CONFIG (run ./setup.sh, or copy config/modes.json.example)"
+  [ -f "$CFL_CONFIG" ] || cfl_die "config not found: $CFL_CONFIG"
   jq -e . "$CFL_CONFIG" >/dev/null 2>&1 || cfl_die "invalid JSON in $CFL_CONFIG"
 }
 
@@ -66,23 +75,27 @@ cfl_render_settings() {
   fref="$(cfl_fusion_ref)"
   mkdir -p "$CFL_STATE_DIR"
   out="$CFL_STATE_DIR/$mode.json"
+  # Only emit env keys for slots the mode actually defines (a partial custom mode
+  # must not write JSON null values into the settings env). model defaults to opus.
   jq -n --arg fref "$fref" --argjson m "$modeobj" '
     def res(v): if v == "fusion" then $fref else v end;
     {
       "$schema": "https://json.schemastore.org/claude-code-settings.json",
-      model: $m.default,
-      env: {
-        "ANTHROPIC_API_KEY": "",
-        "ANTHROPIC_BASE_URL": "https://openrouter.ai/api",
-        "ANTHROPIC_DEFAULT_OPUS_MODEL": res($m.opus),
-        "ANTHROPIC_DEFAULT_SONNET_MODEL": res($m.sonnet),
-        "ANTHROPIC_DEFAULT_HAIKU_MODEL": res($m.haiku),
-        "CLAUDE_CODE_SUBAGENT_MODEL": res($m.subagent),
-        "CLAUDE_CODE_DISABLE_ADVISOR_TOOL": "1",
-        "CLAUDE_CODE_ATTRIBUTION_HEADER": "0",
-        "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
-        "DISABLE_INTERLEAVED_THINKING": "1"
-      }
+      model: ($m.default // "opus"),
+      env: (
+        {
+          "ANTHROPIC_API_KEY": "",
+          "ANTHROPIC_BASE_URL": "https://openrouter.ai/api",
+          "CLAUDE_CODE_DISABLE_ADVISOR_TOOL": "1",
+          "CLAUDE_CODE_ATTRIBUTION_HEADER": "0",
+          "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+          "DISABLE_INTERLEAVED_THINKING": "1"
+        }
+        + (if $m.opus     != null then {"ANTHROPIC_DEFAULT_OPUS_MODEL":   res($m.opus)}     else {} end)
+        + (if $m.sonnet   != null then {"ANTHROPIC_DEFAULT_SONNET_MODEL": res($m.sonnet)}   else {} end)
+        + (if $m.haiku    != null then {"ANTHROPIC_DEFAULT_HAIKU_MODEL":  res($m.haiku)}    else {} end)
+        + (if $m.subagent != null then {"CLAUDE_CODE_SUBAGENT_MODEL":     res($m.subagent)} else {} end)
+      )
     }' > "$out"
   printf '%s' "$out"
 }
