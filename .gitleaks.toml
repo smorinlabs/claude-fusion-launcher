@@ -1,0 +1,14 @@
+# gitleaks config — keep all default rules, but ignore Flox-managed files.
+#
+# Flox writes a pinned lockfile (Nix hashes) and ephemeral logs under .flox/ that
+# can trip generic high-entropy/secret heuristics (e.g. an AWS response-header id
+# in a Flox upgrade-check log). Nothing under .flox/ is a real credential, and the
+# ephemeral dirs are gitignored anyway — so a broad `gitleaks dir .` shouldn't flag them.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Flox-managed files (no real secrets live here)"
+paths = [
+  '''\.flox/''',
+]
