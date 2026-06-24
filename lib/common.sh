@@ -136,10 +136,11 @@ cfl_list_modes() {
 
 # cfl_doctor <key> — health checks with ✓/✗/⚠ and fix hints. Returns non-zero on ✗.
 cfl_doctor() {
-  local key="$1" rc=0
+  local key="$1" src="${2:-}" rc=0
   _d_ok()   { printf '  \xe2\x9c\x93 %s\n' "$1"; }
   _d_no()   { printf '  \xe2\x9c\x97 %s\n' "$1"; [ -n "${2:-}" ] && printf '      \xe2\x86\xb3 %s\n' "$2"; rc=1; }
   _d_warn() { printf '  \xe2\x9a\xa0 %s\n' "$1"; if [ -n "${2:-}" ]; then printf '      \xe2\x86\xb3 %s\n' "$2"; fi; }
+  _d_det()  { printf '      %s\n' "$1"; }
 
   echo "claude-fusion doctor"
   echo "--- environment ---"
@@ -158,38 +159,72 @@ cfl_doctor() {
   echo "--- key & account ---"
   if [ -z "$key" ]; then
     _d_warn "no key provided — skipping key/credit/preset checks" "pass --key/--key-file or set OPENROUTER_API_KEY"
-  elif ! command -v curl >/dev/null 2>&1 || ! command -v jq >/dev/null 2>&1; then
-    _d_warn "curl/jq needed for account checks"
   else
-    local kinfo
-    if kinfo="$(cfl_or_get "$key" "key" 2>/dev/null)"; then
-      _d_ok "key valid (label $(printf '%s' "$kinfo" | jq -r '.data.label // "?"'))"
-      local cred rem use
-      if cred="$(cfl_or_get "$key" "credits" 2>/dev/null)"; then
-        rem="$(printf '%s' "$cred" | jq -r '((.data.total_credits // 0) - (.data.total_usage // 0)) | (.*100|round)/100')"
-        use="$(printf '%s' "$cred" | jq -r '(.data.total_usage // 0) | (.*100|round)/100')"
-        if printf '%s' "$cred" | jq -e '((.data.total_credits // 0) - (.data.total_usage // 0)) > 1' >/dev/null; then
-          _d_ok "credits: \$$rem remaining (used \$$use)"
-        else
-          _d_warn "low credits: \$$rem remaining" "add credits at https://openrouter.ai/settings/credits"
+    # Confirm which key was resolved (local last-4) and where it came from, so a
+    # wrong key file / env var is obvious before any account call.
+    case "$src" in
+      file:*) _d_ok "key resolved (…${key: -4}) — source: file ${src#file:}" ;;
+      env:*)  _d_ok "key resolved (…${key: -4}) — source: env \$${src#env:}" ;;
+      flag)   _d_ok "key resolved (…${key: -4}) — source: --key flag" ;;
+      *)      _d_ok "key resolved (…${key: -4})" ;;
+    esac
+    if ! command -v curl >/dev/null 2>&1 || ! command -v jq >/dev/null 2>&1; then
+      _d_warn "curl/jq needed for account checks"
+    else
+      local kinfo
+      if kinfo="$(cfl_or_get "$key" "key" 2>/dev/null)"; then
+        _d_ok "key valid (label $(printf '%s' "$kinfo" | jq -r '.data.label // "?"'))"
+        local cred rem use
+        if cred="$(cfl_or_get "$key" "credits" 2>/dev/null)"; then
+          rem="$(printf '%s' "$cred" | jq -r '((.data.total_credits // 0) - (.data.total_usage // 0)) | (.*100|round)/100')"
+          use="$(printf '%s' "$cred" | jq -r '(.data.total_usage // 0) | (.*100|round)/100')"
+          if printf '%s' "$cred" | jq -e '((.data.total_credits // 0) - (.data.total_usage // 0)) > 1' >/dev/null; then
+            _d_ok "credits: \$$rem remaining (used \$$use)"
+          else
+            _d_warn "low credits: \$$rem remaining" "add credits at https://openrouter.ai/settings/credits"
+          fi
         fi
-      fi
-      local slug pinfo pm pt
-      slug="$(cfl_cfg '.preset_slug')"
-      if pinfo="$(cfl_or_get "$key" "presets/$slug" 2>/dev/null)"; then
-        pm="$(printf '%s' "$pinfo" | jq -r '.data.designated_version.config.model // empty')"
-        pt="$(printf '%s' "$pinfo" | jq -r '[.data.designated_version.config.tools[]?.type] | index("openrouter:fusion") // empty')"
-        if [ "$pm" = "openrouter/fusion" ] && [ -n "$pt" ]; then
-          _d_ok "preset '$slug' configured (custom panel)"
-          cfl_preset_ready || _d_warn "PRESET_READY marker missing or stale" "run ./setup.sh to write it"
+        local slug pinfo pm pt
+        slug="$(cfl_cfg '.preset_slug')"
+        if pinfo="$(cfl_or_get "$key" "presets/$slug" 2>/dev/null)"; then
+          pm="$(printf '%s' "$pinfo" | jq -r '.data.designated_version.config.model // empty')"
+          pt="$(printf '%s' "$pinfo" | jq -r '[.data.designated_version.config.tools[]?.type] | index("openrouter:fusion") // empty')"
+          if [ "$pm" = "openrouter/fusion" ] && [ -n "$pt" ]; then
+            _d_ok "preset '$slug' configured (custom panel)"
+            cfl_preset_ready || _d_warn "PRESET_READY marker missing or stale" "run ./setup.sh to write it"
+            # Show the live panel exactly as deployed, then diff it against the
+            # config setup.sh builds from (reuses pinfo — no extra API call).
+            local live_panel live_judge live_tc cfg_panel cfg_judge
+            live_panel="$(printf '%s' "$pinfo" | jq -r '[.data.designated_version.config.tools[]? | select(.type=="openrouter:fusion").parameters.analysis_models[]?] | join(", ")')"
+            live_judge="$(printf '%s' "$pinfo" | jq -r '[.data.designated_version.config.tools[]? | select(.type=="openrouter:fusion").parameters.model][0] // "?"')"
+            live_tc="$(printf '%s' "$pinfo" | jq -r '.data.designated_version.config.tool_choice // "?"')"
+            _d_det "panel: $live_panel"
+            _d_det "judge: $live_judge"
+            _d_det "tool_choice: $live_tc"
+            cfg_panel="$(cfl_cfg '.panel_models | join(", ")')"
+            cfg_judge="$(cfl_cfg '.judge_model')"
+            if [ "$live_panel" = "$cfg_panel" ] && [ "$live_judge" = "$cfg_judge" ]; then
+              _d_ok "preset matches config (panel + judge in sync)"
+            else
+              _d_warn "preset differs from config — re-run ./setup.sh to sync"
+              if [ "$live_panel" != "$cfg_panel" ]; then
+                _d_det "panel (config): $cfg_panel"
+                _d_det "panel (live):   $live_panel"
+              fi
+              if [ "$live_judge" != "$cfg_judge" ]; then
+                _d_det "judge (config): $cfg_judge"
+                _d_det "judge (live):   $live_judge"
+              fi
+            fi
+          else
+            _d_no "preset '$slug' exists but misconfigured (model=$pm)" "re-run ./setup.sh"
+          fi
         else
-          _d_no "preset '$slug' exists but misconfigured (model=$pm)" "re-run ./setup.sh"
+          _d_warn "preset '$slug' not found for this key" "run ./setup.sh (launcher uses fallback '$(cfl_cfg '.fallback // "openrouter/fusion"')' until then)"
         fi
       else
-        _d_warn "preset '$slug' not found for this key" "run ./setup.sh (launcher uses fallback '$(cfl_cfg '.fallback // "openrouter/fusion"')' until then)"
+        _d_no "OpenRouter rejected the key (GET /api/v1/key failed)" "check the key is valid and not expired"
       fi
-    else
-      _d_no "OpenRouter rejected the key (GET /api/v1/key failed)" "check the key is valid and not expired"
     fi
   fi
 

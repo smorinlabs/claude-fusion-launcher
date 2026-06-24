@@ -189,6 +189,16 @@ else
 fi
 
 # 20. Doctor account checks are covered with stubbed OpenRouter responses.
+# Build an in-sync preset straight from the config so the diff has nothing to flag,
+# and a drifted variant (one panel model swapped) that must warn but NOT fail.
+synced_preset="$(jq -nc \
+  --argjson panel "$(jq -c '.panel_models' "$CFL_CONFIG")" \
+  --arg judge "$(jq -r '.judge_model' "$CFL_CONFIG")" \
+  '{data:{designated_version:{config:{model:"openrouter/fusion",tool_choice:"required",
+    tools:[{type:"openrouter:fusion",parameters:{model:$judge,analysis_models:$panel}}]}}}}')"
+drift_preset="$(printf '%s' "$synced_preset" \
+  | jq -c '.data.designated_version.config.tools[0].parameters.analysis_models[0]="zzz/drifted-model"')"
+
 doctor_ok_out="$(
   PATH="$fakebin:$PATH"
   cfl_or_get() {
@@ -197,23 +207,49 @@ doctor_ok_out="$(
     elif [ "$2" = "credits" ]; then
       printf '{"data":{"total_credits":1,"total_usage":0.25}}'
     elif [ "$2" = "presets/cc-fusion" ]; then
-      printf '{"data":{"designated_version":{"config":{"model":"openrouter/fusion","tools":[{"type":"openrouter:fusion"}]}}}}'
+      printf '%s' "$synced_preset"
     else
       return 22
     fi
   }
-  cfl_doctor "test"
+  cfl_doctor "test" "file:/tmp/key.env"
 )"
+drift_rc=0
+doctor_drift_out="$(
+  PATH="$fakebin:$PATH"
+  cfl_or_get() {
+    if [ "$2" = "key" ]; then
+      printf '{"data":{"label":"smoke"}}'
+    elif [ "$2" = "credits" ]; then
+      printf '{"data":{"total_credits":10,"total_usage":1}}'
+    elif [ "$2" = "presets/cc-fusion" ]; then
+      printf '%s' "$drift_preset"
+    else
+      return 22
+    fi
+  }
+  cfl_doctor "test" "env:OPENROUTER_API_KEY"
+)" || drift_rc=$?
 doctor_bad_out="$(
   PATH="$fakebin:$PATH"
   cfl_or_get() { return 22; }
   cfl_doctor "test"
 )"
-if [[ "$doctor_ok_out" == *"key valid"* && "$doctor_ok_out" == *"low credits"* && "$doctor_ok_out" == *"preset 'cc-fusion' configured"* \
+# shellcheck disable=SC2016  # the $OPENROUTER_API_KEY below is a literal in a glob, not an expansion
+if [[ "$doctor_ok_out" == *"key resolved (…test)"* \
+  && "$doctor_ok_out" == *"source: file /tmp/key.env"* \
+  && "$doctor_ok_out" == *"key valid"* && "$doctor_ok_out" == *"low credits"* \
+  && "$doctor_ok_out" == *"preset 'cc-fusion' configured"* \
+  && "$doctor_ok_out" == *"qwen/qwen3-coder-plus"* \
+  && "$doctor_ok_out" == *"tool_choice: required"* \
+  && "$doctor_ok_out" == *"matches config"* \
+  && "$doctor_drift_out" == *'source: env $OPENROUTER_API_KEY'* \
+  && "$doctor_drift_out" == *"differs from config"* && "$doctor_drift_out" == *"zzz/drifted-model"* \
+  && "$drift_rc" -eq 0 \
   && "$doctor_bad_out" == *"OpenRouter rejected the key"* ]]; then
   ok "doctor account branch covered"
 else
-  bad "doctor account branch covered"
+  bad "doctor account branch covered" "drift_rc=$drift_rc"
 fi
 
 # 21. --cost reports a numeric usage delta with stubbed curl/claude.
