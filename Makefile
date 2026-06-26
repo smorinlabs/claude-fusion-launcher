@@ -9,7 +9,7 @@ check:
 	echo "deps ok: $(DEPS)"
 
 lint:
-	shellcheck bin/claude-fusion setup.sh lib/common.sh lib/check-openrouter.sh tests/smoke.sh .githooks/pre-commit
+	shellcheck bin/claude-openrouter setup.sh lib/common.sh lib/check-openrouter.sh tests/smoke.sh .githooks/pre-commit
 
 test:
 	./tests/smoke.sh
@@ -19,8 +19,8 @@ setup:
 
 install:
 	@mkdir -p "$(PREFIX)"
-	@ln -sf "$(CURDIR)/bin/claude-fusion" "$(PREFIX)/claude-fusion"
-	@echo "linked $(PREFIX)/claude-fusion -> $(CURDIR)/bin/claude-fusion"
+	@ln -sf "$(CURDIR)/bin/claude-openrouter" "$(PREFIX)/claude-openrouter"
+	@echo "linked $(PREFIX)/claude-openrouter -> $(CURDIR)/bin/claude-openrouter"
 	@case ":$$PATH:" in *":$(PREFIX):"*) ;; *) echo "note: add $(PREFIX) to your PATH";; esac
 
 hooks:

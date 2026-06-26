@@ -33,8 +33,8 @@ on-activate = '''
   # Put the launcher on PATH (on-activate runs for both interactive and
   # `flox activate -- cmd`, unlike [profile] which is interactive-only).
   export PATH="$FLOX_ENV_PROJECT/bin:$PATH"
-  echo "claude-fusion: env ready — claude, curl, jq, shellcheck, just, gitleaks on PATH." >&2
-  echo "claude-fusion: next → ./setup.sh --key-file <key>   then   claude-fusion -g" >&2
+  echo "claude-openrouter: env ready — claude, curl, jq, shellcheck, just, gitleaks on PATH." >&2
+  echo "claude-openrouter: next → ./setup.sh --key-file <key>   then   claude-openrouter -g" >&2
 '''
 
 

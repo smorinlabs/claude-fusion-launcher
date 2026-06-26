@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# claude-fusion pre-flight check: warn (to stderr) if OpenRouter is unreachable or
+# claude-openrouter pre-flight check: warn (to stderr) if OpenRouter is unreachable or
 # the key is rejected, with a hint to run the doctor. Non-blocking (always exits 0).
 #
 # The launcher runs this just before starting Claude Code. (A SessionStart hook
 # DOES execute — even from a --settings file — but Claude Code currently discards
 # SessionStart hook OUTPUT under --init-only/new sessions (anthropics/claude-code#10373),
 # so it can't show this hint. A pre-flight prints reliably. Verified on 2.1.177.)
-# Skip with CFL_SKIP_PRECHECK=1.
+# Skip with COL_SKIP_PRECHECK=1.
 set -uo pipefail
 
 # The launcher exports the key as ANTHROPIC_AUTH_TOKEN; fall back to OPENROUTER_API_KEY.
@@ -26,7 +26,7 @@ if command -v curl >/dev/null 2>&1 && curl "${curl_args[@]}" "$url" 2>/dev/null;
 fi
 
 {
-  echo "⚠ claude-fusion: can't reach or authenticate OpenRouter — fusion calls will fail."
-  echo "  Diagnose it:  claude-fusion doctor   (checks network, key, credits, and your preset)"
+  echo "⚠ claude-openrouter: can't reach or authenticate OpenRouter — requests will fail."
+  echo "  Diagnose it:  claude-openrouter doctor   (checks network, key, credits, and your preset)"
 } >&2
 exit 0
