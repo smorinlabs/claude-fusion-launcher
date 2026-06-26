@@ -15,6 +15,7 @@ else
   CFL_CONFIG="$CFL_CONFIG_EXAMPLE"
 fi
 CFL_STATE_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/claude-fusion"
+# shellcheck disable=SC2034  # CFL_PRESET_READY is used by setup.sh (which sources this file)
 CFL_PRESET_READY="$CFL_STATE_DIR/PRESET_READY"
 # shellcheck disable=SC2034  # OR_API is used by setup.sh (which sources this file)
 OR_API="https://openrouter.ai/api/v1"
@@ -54,49 +55,83 @@ cfl_load_config() {
   jq -e . "$CFL_CONFIG" >/dev/null 2>&1 || cfl_die "invalid JSON in $CFL_CONFIG"
 }
 
-# cfl_cfg <jq-filter> — query the config (raw output).
-cfl_cfg() { jq -r "$1" "$CFL_CONFIG"; }
+# cfl_cfg <jq-args...> — query the config (raw output). Forwards extra args
+# (e.g. --arg) so callers can pass profile names safely.
+cfl_cfg() { jq -r "$@" "$CFL_CONFIG"; }
 
-# cfl_fusion_ref — the model string the "fusion" keyword resolves to:
-# @preset/<slug> once setup has run, otherwise the configured fallback.
-cfl_preset_marker_slug() {
-  [ -f "$CFL_PRESET_READY" ] || return 1
-  local slug
-  slug="$(jq -r '.preset_slug // empty' "$CFL_PRESET_READY" 2>/dev/null || true)"
-  if [ -z "$slug" ]; then
-    slug="$(sed -nE "s/^preset '([^']+)'.*/\1/p; s/^preset_slug=(.*)$/\1/p" "$CFL_PRESET_READY" | head -1)"
-  fi
-  [ -n "$slug" ] || return 1
-  printf '%s' "$slug"
+# cfl_resolve_profile <cli_profile> — profile to use (cli arg > .default_profile).
+cfl_resolve_profile() {
+  if [ -n "${1:-}" ]; then printf '%s' "$1"; return 0; fi
+  cfl_cfg '.default_profile // empty'
 }
 
-cfl_preset_ready() {
-  local slug marker_slug
-  slug="$(cfl_cfg '.preset_slug')"
-  marker_slug="$(cfl_preset_marker_slug || true)"
-  [ "$marker_slug" = "$slug" ]
+# cfl_resolve_mode <cli_mode> — mode to use (cli arg > .default_mode > "extreme").
+cfl_resolve_mode() {
+  if [ -n "${1:-}" ]; then printf '%s' "$1"; return 0; fi
+  local m; m="$(cfl_cfg '.default_mode // empty')"
+  if [ -n "$m" ]; then printf '%s' "$m"; else printf 'extreme'; fi
 }
 
-cfl_fusion_ref() {
-  local slug fallback
-  slug="$(cfl_cfg '.preset_slug')"
-  fallback="$(cfl_cfg '.fallback // "openrouter/fusion"')"
-  if cfl_preset_ready; then printf '@preset/%s' "$slug"; else printf '%s' "$fallback"; fi
+# cfl_profile_type <profile> — "fusion" | "model" | "" (unknown).
+# shellcheck disable=SC2016  # $p is a jq variable, not a bash expansion
+cfl_profile_type() { cfl_cfg --arg p "$1" '.profiles[$p].type // empty'; }
+
+# cfl_preset_ready <slug> — true iff the per-slug readiness marker exists.
+cfl_preset_ready() { [ -f "$CFL_STATE_DIR/presets/$1.json" ]; }
+
+# cfl_fusion_profiles — names of all type:"fusion" profiles, one per line.
+cfl_fusion_profiles() {
+  cfl_cfg '.profiles | to_entries[] | select(.value.type=="fusion") | .key'
 }
 
-# cfl_render_settings <mode> — build a Claude Code settings JSON for the mode and
-# print the path to it. The literal "fusion" in any slot resolves to cfl_fusion_ref.
+# cfl_profile_backend_ref <profile> — resolve a NAMED profile to its backend
+# string. fusion -> @preset/<slug> when ready else fallback; model -> the slug.
+cfl_profile_backend_ref() {
+  local p="$1" type
+  type="$(cfl_profile_type "$p")"
+  # shellcheck disable=SC2016  # $p is a jq variable, not a bash expansion
+  case "$type" in
+    model) cfl_cfg --arg p "$p" '.profiles[$p].model // empty' ;;
+    fusion)
+      local slug fallback
+      slug="$(cfl_cfg --arg p "$p" '.profiles[$p].preset_slug // empty')"
+      fallback="$(cfl_cfg --arg p "$p" '.profiles[$p].fallback // "openrouter/fusion"')"
+      if [ -n "$slug" ] && cfl_preset_ready "$slug"; then printf '@preset/%s' "$slug"; else printf '%s' "$fallback"; fi
+      ;;
+    *) cfl_die "unknown profile '$p' — available: $(cfl_cfg '.profiles | keys | join(", ")')" ;;
+  esac
+}
+
+# cfl_backend_ref <profile> <direct_slug> — top-level backend resolution.
+# A non-empty direct_slug (from --backend) wins and is used verbatim.
+cfl_backend_ref() {
+  local profile="${1:-}" direct="${2:-}"
+  if [ -n "$direct" ]; then printf '%s' "$direct"; return 0; fi
+  cfl_profile_backend_ref "$profile"
+}
+
+# cfl_list_profiles — print the profiles with their resolved targets.
+cfl_list_profiles() {
+  echo "Profiles (config: $CFL_CONFIG):"
+  jq -r '.profiles | to_entries[]
+    | if   .value.type=="fusion" then "  \(.key) (fusion): @preset/\(.value.preset_slug) — \(.value.panel_models|length)-model panel, judge \(.value.judge_model)"
+      elif .value.type=="model"  then "  \(.key) (model): \(.value.model)"
+      else "  \(.key) (unknown type)" end' "$CFL_CONFIG"
+  printf '  default_profile: %s   default_mode: %s\n' "$(cfl_cfg '.default_profile // "—"')" "$(cfl_cfg '.default_mode // "extreme"')"
+}
+
+# cfl_render_settings <mode> <profile> [direct_slug] — build a Claude Code
+# settings JSON for the mode against the resolved backend, and print its path.
+# The literal "backend" in any slot resolves to cfl_backend_ref.
 cfl_render_settings() {
-  local mode="$1" fref out modeobj
+  local mode="$1" profile="${2:-}" direct="${3:-}" fref out modeobj
   modeobj="$(jq -c --arg m "$mode" '.modes[$m] // empty' "$CFL_CONFIG")"
   [ -n "$modeobj" ] || cfl_die "unknown mode '$mode' — available: $(cfl_cfg '.modes | keys | join(", ")')"
-  fref="$(cfl_fusion_ref)"
+  fref="$(cfl_backend_ref "$profile" "$direct")"
   mkdir -p "$CFL_STATE_DIR"
   out="$CFL_STATE_DIR/$mode.json"
-  # Only emit env keys for slots the mode actually defines (a partial custom mode
-  # must not write JSON null values into the settings env). model defaults to opus.
   jq -n --arg fref "$fref" --argjson m "$modeobj" '
-    def res(v): if v == "fusion" then $fref else v end;
+    def res(v): if v == "backend" then $fref else v end;
     {
       "$schema": "https://json.schemastore.org/claude-code-settings.json",
       model: res($m.default // "opus"),
@@ -130,8 +165,8 @@ cfl_credits_usage() { cfl_or_get "$1" "credits" | jq -r '.data.total_usage // em
 cfl_list_modes() {
   echo "Modes (config: $CFL_CONFIG):"
   jq -r '.modes | to_entries[]
-    | "  \(.key): opus=\(.value.opus) sonnet=\(.value.sonnet) haiku=\(.value.haiku) subagent=\(.value.subagent)"' "$CFL_CONFIG"
-  echo "  ('fusion' resolves to: $(cfl_fusion_ref))"
+    | "  \(.key): default=\(.value.default) opus=\(.value.opus) sonnet=\(.value.sonnet) haiku=\(.value.haiku) subagent=\(.value.subagent)"' "$CFL_CONFIG"
+  echo "  ('backend' resolves to the active profile's target — see 'claude-fusion profiles')"
 }
 
 # cfl_doctor <key> — health checks with ✓/✗/⚠ and fix hints. Returns non-zero on ✗.

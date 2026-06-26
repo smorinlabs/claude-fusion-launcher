@@ -1,35 +1,26 @@
 {
-  "preset_slug": "cc-fusion",
-  "panel_models": [
-    "~anthropic/claude-opus-latest",
-    "~openai/gpt-latest",
-    "~google/gemini-pro-latest",
-    "deepseek/deepseek-v3.2",
-    "qwen/qwen3-coder-plus"
-  ],
-  "judge_model": "~anthropic/claude-opus-latest",
-  "fallback": "openrouter/fusion",
+  "default_profile": "fusion",
+  "default_mode": "extreme",
+  "profiles": {
+    "fusion": {
+      "type": "fusion",
+      "preset_slug": "cc-fusion",
+      "panel_models": [
+        "~anthropic/claude-opus-latest",
+        "~openai/gpt-latest",
+        "~google/gemini-pro-latest",
+        "deepseek/deepseek-v3.2",
+        "qwen/qwen3-coder-plus"
+      ],
+      "judge_model": "~anthropic/claude-opus-latest",
+      "fallback": "openrouter/fusion"
+    },
+    "deepseek": { "type": "model", "model": "deepseek/deepseek-v3.2" },
+    "qwen": { "type": "model", "model": "qwen/qwen3-coder-plus" }
+  },
   "modes": {
-    "subagent": {
-      "default": "opus",
-      "opus": "~anthropic/claude-opus-latest",
-      "sonnet": "~anthropic/claude-sonnet-latest",
-      "haiku": "~anthropic/claude-haiku-latest",
-      "subagent": "fusion"
-    },
-    "main": {
-      "default": "opus",
-      "opus": "fusion",
-      "sonnet": "~anthropic/claude-sonnet-latest",
-      "haiku": "~anthropic/claude-haiku-latest",
-      "subagent": "fusion"
-    },
-    "extreme": {
-      "default": "opus",
-      "opus": "fusion",
-      "sonnet": "fusion",
-      "haiku": "fusion",
-      "subagent": "fusion"
-    }
+    "subagent": { "default": "opus", "opus": "~anthropic/claude-opus-latest", "sonnet": "~anthropic/claude-sonnet-latest", "haiku": "~anthropic/claude-haiku-latest", "subagent": "backend" },
+    "main": { "default": "opus", "opus": "backend", "sonnet": "~anthropic/claude-sonnet-latest", "haiku": "~anthropic/claude-haiku-latest", "subagent": "backend" },
+    "extreme": { "default": "backend", "opus": "backend", "sonnet": "backend", "haiku": "backend", "subagent": "backend" }
   }
 }

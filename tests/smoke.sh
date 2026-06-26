@@ -44,9 +44,9 @@ fi
 EOS
 chmod +x "$fakebin/claude"
 
-# 4. each shipped mode renders to valid JSON
+# 4. each shipped mode renders to valid JSON (profile-aware signature)
 for m in subagent main extreme; do
-  out="$(cfl_render_settings "$m")"
+  out="$(cfl_render_settings "$m" fusion)"
   if jq -e . "$out" >/dev/null 2>&1; then
     ok "render mode: $m"
   else
@@ -54,35 +54,35 @@ for m in subagent main extreme; do
   fi
 done
 
-# 5. "fusion" keyword resolves to fallback when preset is NOT set up
+# 5. fusion profile resolves to fallback when its preset is NOT set up
 opus_main="$(jq -r '.env.ANTHROPIC_DEFAULT_OPUS_MODEL' "$XDG_CONFIG_HOME/claude-fusion/main.json")"
 if [ "$opus_main" = "openrouter/fusion" ]; then ok "fusion->fallback (no preset)"; else bad "fusion->fallback (no preset)" "got $opus_main"; fi
 
-# 6. "fusion" keyword resolves to @preset/<slug> once the matching marker exists
-echo "preset 'cc-fusion' verified at 2000-01-01T00:00:00Z" > "$XDG_CONFIG_HOME/claude-fusion/PRESET_READY"
-out="$(cfl_render_settings main)"
+# 6. fusion profile resolves to @preset/<slug> once the per-slug marker exists
+mkdir -p "$XDG_CONFIG_HOME/claude-fusion/presets"
+printf '{"preset_slug":"cc-fusion","verified_at":"2000-01-01T00:00:00Z"}' > "$XDG_CONFIG_HOME/claude-fusion/presets/cc-fusion.json"
+out="$(cfl_render_settings main fusion)"
 opus_main="$(jq -r '.env.ANTHROPIC_DEFAULT_OPUS_MODEL' "$out")"
 if [ "$opus_main" = "@preset/cc-fusion" ]; then ok "fusion->@preset (preset ready)"; else bad "fusion->@preset (preset ready)" "got $opus_main"; fi
 
-# 6b. stale markers for a different preset_slug must not route to @preset/<new-slug>
+# 6b. a marker for a different slug must NOT route to @preset/<this-slug>
 stalecfg="$(mktemp)"
-jq '.preset_slug = "cc-fusion-new"' "$CFL_CONFIG" > "$stalecfg"
-old_cfg="$CFL_CONFIG"; CFL_CONFIG="$stalecfg"; stale_out="$(cfl_render_settings main)"; CFL_CONFIG="$old_cfg"
+jq '.profiles.fusion.preset_slug = "cc-fusion-new"' "$CFL_CONFIG" > "$stalecfg"
+old_cfg="$CFL_CONFIG"; CFL_CONFIG="$stalecfg"; stale_out="$(cfl_render_settings main fusion)"; CFL_CONFIG="$old_cfg"
 stale_opus="$(jq -r '.env.ANTHROPIC_DEFAULT_OPUS_MODEL' "$stale_out")"
 if [ "$stale_opus" = "openrouter/fusion" ]; then ok "stale preset marker ignored"; else bad "stale preset marker ignored" "got $stale_opus"; fi
 rm -f "$stalecfg"
 
-# 6c. the top-level default model slot also resolves the "fusion" keyword
+# 6c. the top-level default model slot also resolves the "backend" keyword
 defcfg="$(mktemp)"
-jq '.modes.default_fusion = {"default":"fusion","opus":"~anthropic/claude-opus-latest"}' "$CFL_CONFIG" > "$defcfg"
-old_cfg="$CFL_CONFIG"; CFL_CONFIG="$defcfg"; def_out="$(cfl_render_settings default_fusion)"; CFL_CONFIG="$old_cfg"
+jq '.modes.default_fusion = {"default":"backend","opus":"~anthropic/claude-opus-latest"}' "$CFL_CONFIG" > "$defcfg"
+old_cfg="$CFL_CONFIG"; CFL_CONFIG="$defcfg"; def_out="$(cfl_render_settings default_fusion fusion)"; CFL_CONFIG="$old_cfg"
 def_model="$(jq -r '.model' "$def_out")"
-if [ "$def_model" = "@preset/cc-fusion" ]; then ok "default slot resolves fusion"; else bad "default slot resolves fusion" "got $def_model"; fi
+if [ "$def_model" = "@preset/cc-fusion" ]; then ok "default slot resolves backend"; else bad "default slot resolves backend" "got $def_model"; fi
 rm -f "$defcfg"
 
-# 7. subagent mode keeps a plain Opus main but fusion subagent (re-render now
-#    that PRESET_READY exists, so we don't read the stale fallback render).
-sub_out="$(cfl_render_settings subagent)"
+# 7. subagent mode keeps a plain Opus main but fusion subagent
+sub_out="$(cfl_render_settings subagent fusion)"
 sub="$(jq -r '.env.CLAUDE_CODE_SUBAGENT_MODEL' "$sub_out")"
 mainslot="$(jq -r '.env.ANTHROPIC_DEFAULT_OPUS_MODEL' "$sub_out")"
 if [ "$sub" = "@preset/cc-fusion" ] && [ "$mainslot" = "~anthropic/claude-opus-latest" ]; then
@@ -92,7 +92,7 @@ else
 fi
 
 # 8. advisor disabled in every rendered profile
-ext_out="$(cfl_render_settings extreme)"
+ext_out="$(cfl_render_settings extreme fusion)"
 if jq -e '.env.CLAUDE_CODE_DISABLE_ADVISOR_TOOL == "1"' "$ext_out" >/dev/null; then ok "advisor disabled"; else bad "advisor disabled"; fi
 
 # 8b. rendered env never contains null values (all strings)
@@ -100,8 +100,8 @@ if jq -e '[.env[]] | all(type == "string")' "$ext_out" >/dev/null; then ok "env 
 
 # 8c. a partial custom mode OMITS undefined slots (must not write null env keys)
 partcfg="$(mktemp)"
-jq '.modes.partial = {"default":"opus","opus":"fusion","subagent":"fusion"}' "$CFL_CONFIG" > "$partcfg"
-old_cfg="$CFL_CONFIG"; CFL_CONFIG="$partcfg"; part_out="$(cfl_render_settings partial)"; CFL_CONFIG="$old_cfg"
+jq '.modes.partial = {"default":"opus","opus":"backend","subagent":"backend"}' "$CFL_CONFIG" > "$partcfg"
+old_cfg="$CFL_CONFIG"; CFL_CONFIG="$partcfg"; part_out="$(cfl_render_settings partial fusion)"; CFL_CONFIG="$old_cfg"
 nulls="$(jq -c '[.env[] | select(. == null)] | length' "$part_out")"
 has_sonnet="$(jq -c '.env | has("ANTHROPIC_DEFAULT_SONNET_MODEL")' "$part_out")"
 if [ "$nulls" = "0" ] && [ "$has_sonnet" = "false" ]; then ok "partial mode omits null slots"; else bad "partial mode omits null slots" "nulls=$nulls sonnetKey=$has_sonnet"; fi
