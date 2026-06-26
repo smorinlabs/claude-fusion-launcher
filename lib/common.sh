@@ -15,8 +15,6 @@ else
   CFL_CONFIG="$CFL_CONFIG_EXAMPLE"
 fi
 CFL_STATE_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/claude-fusion"
-# shellcheck disable=SC2034  # CFL_PRESET_READY is used by setup.sh (which sources this file)
-CFL_PRESET_READY="$CFL_STATE_DIR/PRESET_READY"
 # shellcheck disable=SC2034  # OR_API is used by setup.sh (which sources this file)
 OR_API="https://openrouter.ai/api/v1"
 

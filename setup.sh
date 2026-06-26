@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# setup.sh — one-time per-user setup: create your OpenRouter "cc-fusion" preset.
+# setup.sh — creates an OpenRouter preset for each fusion profile in the config.
 set -euo pipefail
 
 # Resolve $0 through symlinks so setup works no matter where it's invoked from.

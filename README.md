@@ -55,7 +55,7 @@ A **mode** decides where the active profile's backend is used. Pick one with `--
 
 | Mode | Main model | Subagents | Best for | Relative cost |
 |------|-----------|-----------|----------|:---:|
-| `main` | **backend** | **backend** | backend as main + subagents only | $$ |
+| `main` | **backend** | **backend** | backend as your main model and in subagents | $$ |
 | `subagent` | Opus | **backend** | cheaper day-to-day; backend only when Claude spawns a subagent | $ |
 | `extreme` *(default)* | **backend** | **backend** | every tier (Opus/Sonnet/Haiku) + subagents on backend | $$$ |
 
@@ -82,9 +82,16 @@ cp config/modes.json.example config/modes.json
   bin/claude-fusion --mode myteam -p "..."
   ```
 - **Change the fusion panel itself** (which models deliberate + the judge), then re-run `./setup.sh`:
-  ```json
-  "panel_models": ["~anthropic/claude-opus-latest","~openai/gpt-latest","~google/gemini-pro-latest","deepseek/deepseek-v3.2","qwen/qwen3-coder-plus"],
-  "judge_model": "~anthropic/claude-opus-latest"
+  ```jsonc
+  "profiles": {
+    "fusion": {
+      "type": "fusion",
+      "preset_slug": "cc-fusion",
+      "panel_models": ["~anthropic/claude-opus-latest","~openai/gpt-latest","~google/gemini-pro-latest","deepseek/deepseek-v3.2","qwen/qwen3-coder-plus"],
+      "judge_model": "~anthropic/claude-opus-latest",
+      "fallback": "openrouter/fusion"
+    }
+  }
   ```
 
 ---
@@ -153,7 +160,7 @@ Before launching Claude, the launcher runs a fast pre-flight: if OpenRouter is u
 
 ## Cost & latency
 
-A fusion turn runs several models plus a judge, so it costs and takes more than a single model — observed roughly **$0.15–0.35 per fusion turn** vs ~$0.01 for one Opus turn. By mode: `subagent` is cheapest (fusion only on subagent spawns), `main` fuses every main turn, `extreme` is the most expensive. Keep prompts focused, and use `--cost` to see a session's actual spend (it waits briefly, with a countdown, for OpenRouter billing to settle).
+A fusion turn runs several models plus a judge, so it costs and takes more than a single model — observed roughly **$0.15–0.35 per fusion turn** vs ~$0.01 for one Opus turn. By mode: `subagent` is cheapest (backend only on subagent spawns), `main` routes every main turn through the backend, `extreme` is the most expensive. Keep prompts focused, and use `--cost` to see a session's actual spend (it waits briefly, with a countdown, for OpenRouter billing to settle).
 
 ---
 
@@ -169,7 +176,7 @@ Run **`claude-fusion doctor`** first — it checks most of these and prints a fi
 | `model not found` errors | A panel slug in `config/modes.json` is invalid — check it against <https://openrouter.ai/api/v1/models>. |
 | Claude Code ignores the base URL / "model not found" | A cached Anthropic login or a real `ANTHROPIC_API_KEY` in your shell can interfere. The launcher unsets it per-run; if it persists, `/logout` in Claude Code and unset the key (`doctor` warns if it's set). |
 | `--cost` says "no usage change detected" | OpenRouter billing lagged past the ~30s wait; check <https://openrouter.ai/activity>. |
-| The advisor never fires | Expected — Claude Code's advisor is a server-side Anthropic tool that doesn't work through OpenRouter (it's disabled here). Use `main`/`extreme` (fusion main) or `subagent` (fusion subagents) instead. |
+| The advisor never fires | Expected — Claude Code's advisor is a server-side Anthropic tool that doesn't work through OpenRouter (it's disabled here). Use `main`/`extreme` (backend as main) or `subagent` (backend in subagents) instead. |
 
 ---
 

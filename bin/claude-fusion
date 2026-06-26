@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# claude-fusion — run Claude Code through OpenRouter Fusion, per a configurable mode.
+# claude-fusion — run Claude Code through OpenRouter on a configurable profile + mode.
 # The API key is deliberately scoped to subshells so it never leaks into your shell;
 # silence shellcheck's subshell-modification notes for that intentional pattern.
 # shellcheck disable=SC2030,SC2031
