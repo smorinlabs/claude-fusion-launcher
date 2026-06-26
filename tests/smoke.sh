@@ -44,9 +44,9 @@ fi
 EOS
 chmod +x "$fakebin/claude"
 
-# 4. each shipped mode renders to valid JSON
+# 4. each shipped mode renders to valid JSON (profile-aware signature)
 for m in subagent main extreme; do
-  out="$(cfl_render_settings "$m")"
+  out="$(cfl_render_settings "$m" fusion)"
   if jq -e . "$out" >/dev/null 2>&1; then
     ok "render mode: $m"
   else
@@ -54,35 +54,57 @@ for m in subagent main extreme; do
   fi
 done
 
-# 5. "fusion" keyword resolves to fallback when preset is NOT set up
-opus_main="$(jq -r '.env.ANTHROPIC_DEFAULT_OPUS_MODEL' "$XDG_CONFIG_HOME/claude-fusion/main.json")"
+# 4b. the settings path is unique per resolved backend (same mode, different profile
+#     or a direct slug must NOT collide on one $mode.json), and the write is atomic.
+p_fusion="$(cfl_render_settings extreme fusion)"
+p_deep="$(cfl_render_settings extreme deepseek)"
+p_direct="$(cfl_render_settings extreme "" "qwen/qwen3-coder-plus")"
+if [ "$p_fusion" != "$p_deep" ] && [ "$p_deep" != "$p_direct" ] && [ "$p_fusion" != "$p_direct" ] \
+  && jq -e . "$p_deep" >/dev/null 2>&1 && jq -e . "$p_direct" >/dev/null 2>&1; then
+  ok "settings path unique per backend"
+else
+  bad "settings path unique per backend" "$(basename "$p_fusion") $(basename "$p_deep") $(basename "$p_direct")"
+fi
+
+# 5. fusion profile resolves to fallback when its preset is NOT set up
+out5="$(cfl_render_settings main fusion)"
+opus_main="$(jq -r '.env.ANTHROPIC_DEFAULT_OPUS_MODEL' "$out5")"
 if [ "$opus_main" = "openrouter/fusion" ]; then ok "fusion->fallback (no preset)"; else bad "fusion->fallback (no preset)" "got $opus_main"; fi
 
-# 6. "fusion" keyword resolves to @preset/<slug> once the matching marker exists
-echo "preset 'cc-fusion' verified at 2000-01-01T00:00:00Z" > "$XDG_CONFIG_HOME/claude-fusion/PRESET_READY"
-out="$(cfl_render_settings main)"
+# 6. fusion profile resolves to @preset/<slug> once the per-slug marker exists
+mkdir -p "$XDG_CONFIG_HOME/claude-fusion/presets"
+printf '{"preset_slug":"cc-fusion","verified_at":"2000-01-01T00:00:00Z"}' > "$XDG_CONFIG_HOME/claude-fusion/presets/cc-fusion.json"
+out="$(cfl_render_settings main fusion)"
 opus_main="$(jq -r '.env.ANTHROPIC_DEFAULT_OPUS_MODEL' "$out")"
 if [ "$opus_main" = "@preset/cc-fusion" ]; then ok "fusion->@preset (preset ready)"; else bad "fusion->@preset (preset ready)" "got $opus_main"; fi
 
-# 6b. stale markers for a different preset_slug must not route to @preset/<new-slug>
+# 6b. a marker for a different slug must NOT route to @preset/<this-slug>
 stalecfg="$(mktemp)"
-jq '.preset_slug = "cc-fusion-new"' "$CFL_CONFIG" > "$stalecfg"
-old_cfg="$CFL_CONFIG"; CFL_CONFIG="$stalecfg"; stale_out="$(cfl_render_settings main)"; CFL_CONFIG="$old_cfg"
+jq '.profiles.fusion.preset_slug = "cc-fusion-new"' "$CFL_CONFIG" > "$stalecfg"
+old_cfg="$CFL_CONFIG"; CFL_CONFIG="$stalecfg"; stale_out="$(cfl_render_settings main fusion)"; CFL_CONFIG="$old_cfg"
 stale_opus="$(jq -r '.env.ANTHROPIC_DEFAULT_OPUS_MODEL' "$stale_out")"
 if [ "$stale_opus" = "openrouter/fusion" ]; then ok "stale preset marker ignored"; else bad "stale preset marker ignored" "got $stale_opus"; fi
 rm -f "$stalecfg"
 
-# 6c. the top-level default model slot also resolves the "fusion" keyword
+# 6c. the top-level default model slot also resolves the "backend" keyword
 defcfg="$(mktemp)"
-jq '.modes.default_fusion = {"default":"fusion","opus":"~anthropic/claude-opus-latest"}' "$CFL_CONFIG" > "$defcfg"
-old_cfg="$CFL_CONFIG"; CFL_CONFIG="$defcfg"; def_out="$(cfl_render_settings default_fusion)"; CFL_CONFIG="$old_cfg"
+jq '.modes.default_fusion = {"default":"backend","opus":"~anthropic/claude-opus-latest"}' "$CFL_CONFIG" > "$defcfg"
+old_cfg="$CFL_CONFIG"; CFL_CONFIG="$defcfg"; def_out="$(cfl_render_settings default_fusion fusion)"; CFL_CONFIG="$old_cfg"
 def_model="$(jq -r '.model' "$def_out")"
-if [ "$def_model" = "@preset/cc-fusion" ]; then ok "default slot resolves fusion"; else bad "default slot resolves fusion" "got $def_model"; fi
+if [ "$def_model" = "@preset/cc-fusion" ]; then ok "default slot resolves backend"; else bad "default slot resolves backend" "got $def_model"; fi
 rm -f "$defcfg"
 
-# 7. subagent mode keeps a plain Opus main but fusion subagent (re-render now
-#    that PRESET_READY exists, so we don't read the stale fallback render).
-sub_out="$(cfl_render_settings subagent)"
+# 6d. a type:"preset" profile resolves to its fallback (bare model) with no marker,
+#     and to @preset/<slug> once the per-slug marker exists.
+fw_ref="$(cfl_profile_backend_ref glm-fireworks)"
+if [ "$fw_ref" = "z-ai/glm-5.2" ]; then ok "preset->fallback (no preset)"; else bad "preset->fallback (no preset)" "got $fw_ref"; fi
+printf '{"preset_slug":"cc-glm-fireworks"}' > "$XDG_CONFIG_HOME/claude-fusion/presets/cc-glm-fireworks.json"
+fw_ref2="$(cfl_profile_backend_ref glm-fireworks)"
+if [ "$fw_ref2" = "@preset/cc-glm-fireworks" ]; then ok "preset->@preset (marker present)"; else bad "preset->@preset (marker present)" "got $fw_ref2"; fi
+rm -f "$XDG_CONFIG_HOME/claude-fusion/presets/cc-glm-fireworks.json"
+
+# 7. subagent mode keeps a plain Opus main but fusion subagent
+sub_out="$(cfl_render_settings subagent fusion)"
 sub="$(jq -r '.env.CLAUDE_CODE_SUBAGENT_MODEL' "$sub_out")"
 mainslot="$(jq -r '.env.ANTHROPIC_DEFAULT_OPUS_MODEL' "$sub_out")"
 if [ "$sub" = "@preset/cc-fusion" ] && [ "$mainslot" = "~anthropic/claude-opus-latest" ]; then
@@ -92,7 +114,7 @@ else
 fi
 
 # 8. advisor disabled in every rendered profile
-ext_out="$(cfl_render_settings extreme)"
+ext_out="$(cfl_render_settings extreme fusion)"
 if jq -e '.env.CLAUDE_CODE_DISABLE_ADVISOR_TOOL == "1"' "$ext_out" >/dev/null; then ok "advisor disabled"; else bad "advisor disabled"; fi
 
 # 8b. rendered env never contains null values (all strings)
@@ -100,8 +122,8 @@ if jq -e '[.env[]] | all(type == "string")' "$ext_out" >/dev/null; then ok "env 
 
 # 8c. a partial custom mode OMITS undefined slots (must not write null env keys)
 partcfg="$(mktemp)"
-jq '.modes.partial = {"default":"opus","opus":"fusion","subagent":"fusion"}' "$CFL_CONFIG" > "$partcfg"
-old_cfg="$CFL_CONFIG"; CFL_CONFIG="$partcfg"; part_out="$(cfl_render_settings partial)"; CFL_CONFIG="$old_cfg"
+jq '.modes.partial = {"default":"opus","opus":"backend","subagent":"backend"}' "$CFL_CONFIG" > "$partcfg"
+old_cfg="$CFL_CONFIG"; CFL_CONFIG="$partcfg"; part_out="$(cfl_render_settings partial fusion)"; CFL_CONFIG="$old_cfg"
 nulls="$(jq -c '[.env[] | select(. == null)] | length' "$part_out")"
 has_sonnet="$(jq -c '.env | has("ANTHROPIC_DEFAULT_SONNET_MODEL")' "$part_out")"
 if [ "$nulls" = "0" ] && [ "$has_sonnet" = "false" ]; then ok "partial mode omits null slots"; else bad "partial mode omits null slots" "nulls=$nulls sonnetKey=$has_sonnet"; fi
@@ -139,12 +161,38 @@ rm -f "$lns"
 modes_out="$(bin/claude-fusion modes 2>/dev/null || true)"
 case "$modes_out" in *"subagent:"*) ok "modes subcommand" ;; *) bad "modes subcommand" ;; esac
 
-# 14. --show-settings renders valid JSON without a key or claude
-ss_json="$(bin/claude-fusion --show-settings --mode main 2>/dev/null | sed -n '/^----$/,$p' | tail -n +2)"
-if printf '%s' "$ss_json" | jq -e '.env.ANTHROPIC_DEFAULT_OPUS_MODEL' >/dev/null 2>&1; then ok "--show-settings renders JSON"; else bad "--show-settings renders JSON"; fi
+# 13b. 'profiles' subcommand lists profiles + targets (fusion, model, and preset)
+profiles_out="$(bin/claude-fusion profiles 2>/dev/null || true)"
+if [[ "$profiles_out" == *"fusion (fusion):"* && "$profiles_out" == *"glm-fireworks (preset):"* && "$profiles_out" == *"fireworks"* ]]; then
+  ok "profiles subcommand"
+else
+  bad "profiles subcommand" "$profiles_out"
+fi
+
+# 14. --show-settings renders valid JSON and reports the active profile
+ss_out="$(bin/claude-fusion --show-settings --profile fusion --mode main 2>/dev/null || true)"
+ss_json="$(printf '%s' "$ss_out" | sed -n '/^----$/,$p' | tail -n +2)"
+if printf '%s' "$ss_json" | jq -e '.env.ANTHROPIC_DEFAULT_OPUS_MODEL' >/dev/null 2>&1 \
+  && [[ "$ss_out" == *"profile:"* ]]; then ok "--show-settings renders JSON"; else bad "--show-settings renders JSON" "$ss_out"; fi
 
 # 14b. unknown modes must fail instead of silently rendering defaults
 if bin/claude-fusion --show-settings --mode bogus >/dev/null 2>&1; then bad "unknown mode rejected"; else ok "unknown mode rejected"; fi
+
+# 14c. --backend uses the raw slug in all slots under the default (extreme) mode
+be_out="$(bin/claude-fusion --show-settings --backend "qwen/qwen3-coder-plus" 2>/dev/null || true)"
+be_json="$(printf '%s' "$be_out" | sed -n '/^----$/,$p' | tail -n +2)"
+be_default="$(printf '%s' "$be_json" | jq -r '.model')"
+be_sub="$(printf '%s' "$be_json" | jq -r '.env.CLAUDE_CODE_SUBAGENT_MODEL')"
+if [ "$be_default" = "qwen/qwen3-coder-plus" ] && [ "$be_sub" = "qwen/qwen3-coder-plus" ]; then ok "--backend fills all slots (extreme default)"; else bad "--backend fills all slots" "default=$be_default sub=$be_sub"; fi
+
+# 14d. --profile model alias resolves in all slots under default mode
+ds_out="$(bin/claude-fusion --show-settings --profile deepseek 2>/dev/null || true)"
+ds_json="$(printf '%s' "$ds_out" | sed -n '/^----$/,$p' | tail -n +2)"
+ds_default="$(printf '%s' "$ds_json" | jq -r '.model')"
+if [ "$ds_default" = "deepseek/deepseek-v3.2" ]; then ok "--profile model alias resolves"; else bad "--profile model alias resolves" "$ds_default"; fi
+
+# 14e. --profile and --backend together is an error
+if bin/claude-fusion --show-settings --profile fusion --backend foo >/dev/null 2>&1; then bad "profile+backend mutually exclusive"; else ok "profile+backend mutually exclusive"; fi
 
 # 15. no args (non-TTY) prints help and exits 0
 if out_help="$(bin/claude-fusion </dev/null 2>&1)" && printf '%s' "$out_help" | grep -q 'claude-fusion'; then ok "no-args help (exit 0)"; else bad "no-args help"; fi
@@ -192,8 +240,8 @@ fi
 # Build an in-sync preset straight from the config so the diff has nothing to flag,
 # and a drifted variant (one panel model swapped) that must warn but NOT fail.
 synced_preset="$(jq -nc \
-  --argjson panel "$(jq -c '.panel_models' "$CFL_CONFIG")" \
-  --arg judge "$(jq -r '.judge_model' "$CFL_CONFIG")" \
+  --argjson panel "$(jq -c '.profiles.fusion.panel_models' "$CFL_CONFIG")" \
+  --arg judge "$(jq -r '.profiles.fusion.judge_model' "$CFL_CONFIG")" \
   '{data:{designated_version:{config:{model:"openrouter/fusion",tool_choice:"required",
     tools:[{type:"openrouter:fusion",parameters:{model:$judge,analysis_models:$panel}}]}}}}')"
 drift_preset="$(printf '%s' "$synced_preset" \
@@ -243,6 +291,7 @@ if [[ "$doctor_ok_out" == *"key resolved (…test)"* \
   && "$doctor_ok_out" == *"qwen/qwen3-coder-plus"* \
   && "$doctor_ok_out" == *"tool_choice: required"* \
   && "$doctor_ok_out" == *"matches config"* \
+  && "$doctor_ok_out" == *"fusion (fusion):"* \
   && "$doctor_drift_out" == *'source: env $OPENROUTER_API_KEY'* \
   && "$doctor_drift_out" == *"differs from config"* && "$doctor_drift_out" == *"zzz/drifted-model"* \
   && "$drift_rc" -eq 0 \
@@ -306,6 +355,98 @@ else
   bad "setup handles non-JSON preset response" "$setup_out"
 fi
 
+# 22b. Setup creates a preset per fusion profile and writes a per-slug marker each.
+# The stub echoes back the requested model so it works for fusion AND preset bodies.
+okbin="$tmpstate/setup-okbin"; mkdir -p "$okbin"
+cat > "$okbin/curl" <<'EOS'
+#!/usr/bin/env bash
+url=""; body=""; prev=""
+for arg in "$@"; do
+  case "$arg" in https://*) url="$arg" ;; esac
+  [ "$prev" = "-d" ] && body="$arg"
+  prev="$arg"
+done
+case "$url" in
+  */key) printf '{"data":{"label":"smoke"}}' ;;
+  */credits) printf '{"data":{"total_credits":10,"total_usage":1}}' ;;
+  */presets/*/chat/completions)
+    # Echo the posted config back verbatim (model, provider, tools, tool_choice) so
+    # both the fusion field-verification and the preset provider check see a match.
+    cfg="$(printf '%s' "$body" | jq -c '{model, provider:(.provider//{}), tools:(.tools//[]), tool_choice:(.tool_choice//null)}')"
+    printf '{"data":{"designated_version":{"config":%s}}}' "$cfg" ;;
+  *) printf '{"error":{"message":"unexpected URL"}}' ;;
+esac
+EOS
+chmod +x "$okbin/curl"
+two_cfg="$(mktemp)"
+jq '.profiles["fusion2"] = {"type":"fusion","preset_slug":"cc-fusion-2","panel_models":["deepseek/deepseek-v3.2"],"judge_model":"deepseek/deepseek-v3.2","fallback":"openrouter/fusion"}' "$CFL_CONFIG" > "$two_cfg"
+ok_state="$tmpstate/setup-ok-state"
+ok_out="$(PATH="$okbin:$PATH" XDG_CONFIG_HOME="$ok_state" CLAUDE_FUSION_CONFIG="$two_cfg" ./setup.sh --key test 2>&1)"
+if [ -f "$ok_state/claude-fusion/presets/cc-fusion.json" ] && [ -f "$ok_state/claude-fusion/presets/cc-fusion-2.json" ]; then
+  ok "setup creates a marker per fusion profile"
+else
+  bad "setup creates a marker per fusion profile" "$ok_out"
+fi
+
+# 22c. setup --profile <model-profile> creates nothing and exits 0.
+skip_out="$(PATH="$okbin:$PATH" XDG_CONFIG_HOME="$tmpstate/setup-skip-state" CLAUDE_FUSION_CONFIG="$two_cfg" ./setup.sh --profile deepseek --key test 2>&1)"
+skip_rc=$?
+if [ "$skip_rc" -eq 0 ] && [[ "$skip_out" == *"nothing to set up"* ]] && [ ! -d "$tmpstate/setup-skip-state/claude-fusion/presets" ]; then
+  ok "setup --profile model skips"
+else
+  bad "setup --profile model skips" "rc=$skip_rc $skip_out"
+fi
+rm -f "$two_cfg"
+
+# 22d. setup --profile <preset-profile> creates a provider-pinned preset: writes the
+#      marker AND the POSTed body carries the provider pin (provider.only).
+presetbin="$tmpstate/setup-presetbin"; mkdir -p "$presetbin"
+preset_body_log="$tmpstate/preset-body.txt"
+cat > "$presetbin/curl" <<'EOS'
+#!/usr/bin/env bash
+url=""; body=""; prev=""
+for arg in "$@"; do
+  case "$arg" in https://*) url="$arg" ;; esac
+  [ "$prev" = "-d" ] && body="$arg"
+  prev="$arg"
+done
+case "$url" in
+  */key) printf '{"data":{"label":"smoke"}}' ;;
+  */credits) printf '{"data":{"total_credits":10,"total_usage":1}}' ;;
+  */presets/*/chat/completions)
+    printf '%s\n' "$body" >> "$PRESET_BODY_LOG"
+    m="$(printf '%s' "$body" | jq -r '.model // "openrouter/fusion"')"
+    prov="$(printf '%s' "$body" | jq -c '.provider // {}')"
+    printf '{"data":{"designated_version":{"config":{"model":"%s","provider":%s}}}}' "$m" "$prov" ;;
+  *) printf '{"error":{"message":"unexpected URL"}}' ;;
+esac
+EOS
+chmod +x "$presetbin/curl"
+preset_state="$tmpstate/setup-preset-state"
+PATH="$presetbin:$PATH" PRESET_BODY_LOG="$preset_body_log" XDG_CONFIG_HOME="$preset_state" \
+  ./setup.sh --profile glm-fireworks --key test >/dev/null 2>&1
+preset_rc=$?
+if [ "$preset_rc" -eq 0 ] \
+  && [ -f "$preset_state/claude-fusion/presets/cc-glm-fireworks.json" ] \
+  && jq -rc 'select(.model=="z-ai/glm-5.2") | .provider.only' "$preset_body_log" 2>/dev/null | grep -q fireworks; then
+  ok "setup creates provider-pinned preset"
+else
+  bad "setup creates provider-pinned preset" "rc=$preset_rc"
+fi
+
+# 22e. A preset-backed profile missing preset_slug is skipped with a warning and a
+#      non-zero exit, and writes no marker (no POST to /presets//chat/completions).
+badcfg="$(mktemp)"
+jq '.profiles["broken"] = {"type":"fusion","panel_models":["deepseek/deepseek-v3.2"],"judge_model":"deepseek/deepseek-v3.2"}' "$CFL_CONFIG" > "$badcfg"
+badslug_out="$(PATH="$presetbin:$PATH" XDG_CONFIG_HOME="$tmpstate/setup-badslug" CLAUDE_FUSION_CONFIG="$badcfg" ./setup.sh --profile broken --key test 2>&1)"
+badslug_rc=$?
+if [ "$badslug_rc" -ne 0 ] && [[ "$badslug_out" == *"missing preset_slug"* ]] && [ ! -e "$tmpstate/setup-badslug/claude-fusion/presets/null.json" ]; then
+  ok "setup rejects missing preset_slug"
+else
+  bad "setup rejects missing preset_slug" "rc=$badslug_rc $badslug_out"
+fi
+rm -f "$badcfg"
+
 # 23. gitleaks hook falls back to the older protect --staged syntax.
 gitleaksbin="$tmpstate/gitleaksbin"; mkdir -p "$gitleaksbin"
 gitleaks_log="$tmpstate/gitleaks.log"
@@ -350,10 +491,10 @@ fi
 
 default_argv_out="$tmpstate/default-claude-argv.txt"
 if PATH="$fakebin:$PATH" CLAUDE_ARGV_OUT="$default_argv_out" CFL_SKIP_PRECHECK=1 OPENROUTER_API_KEY=test just --quiet run >/dev/null 2>&1 \
-  && grep -Eq '/main\.json$' "$default_argv_out"; then
-  ok "just run defaults to main"
+  && grep -Eq '/fusion-extreme\.json$' "$default_argv_out"; then
+  ok "just run defaults to extreme"
 else
-  bad "just run defaults to main" "$(tr '\n' ' ' < "$default_argv_out" 2>/dev/null || true)"
+  bad "just run defaults to extreme" "$(tr '\n' ' ' < "$default_argv_out" 2>/dev/null || true)"
 fi
 
 setup_dry="$(just --dry-run setup --key-file "space path" 2>&1 || true)"
@@ -378,6 +519,130 @@ else
   bad "just install defaults to HOME"
 fi
 rm -rf "$CFL_ROOT/~"
+
+# 26. Doctor covers type:"preset" profiles (provider-pinned) — in-sync + drift, non-fatal.
+glm_synced="$(jq -nc '{data:{designated_version:{config:{model:"z-ai/glm-5.2",provider:{only:["fireworks"]}}}}}')"
+glm_drift="$(jq -nc '{data:{designated_version:{config:{model:"z-ai/glm-5.2",provider:{only:["together"]}}}}}')"
+dp_ok_out="$(
+  PATH="$fakebin:$PATH"
+  cfl_or_get() {
+    case "$2" in
+      key) printf '{"data":{"label":"smoke"}}' ;;
+      credits) printf '{"data":{"total_credits":10,"total_usage":1}}' ;;
+      presets/cc-glm-fireworks) printf '%s' "$glm_synced" ;;
+      *) return 22 ;;
+    esac
+  }
+  cfl_doctor "test" "flag"
+)"
+dp_drift_rc=0
+dp_drift_out="$(
+  PATH="$fakebin:$PATH"
+  cfl_or_get() {
+    case "$2" in
+      key) printf '{"data":{"label":"smoke"}}' ;;
+      credits) printf '{"data":{"total_credits":10,"total_usage":1}}' ;;
+      presets/cc-glm-fireworks) printf '%s' "$glm_drift" ;;
+      *) return 22 ;;
+    esac
+  }
+  cfl_doctor "test" "flag"
+)" || dp_drift_rc=$?
+if [[ "$dp_ok_out" == *"preset 'cc-glm-fireworks' configured (profile 'glm-fireworks', model z-ai/glm-5.2)"* \
+  && "$dp_ok_out" == *"model + provider in sync"* \
+  && "$dp_drift_out" == *"differs from config"* && "$dp_drift_out" == *'"only":["together"]'* \
+  && "$dp_drift_rc" -eq 0 ]]; then
+  ok "doctor covers preset profiles"
+else
+  bad "doctor covers preset profiles" "drift_rc=$dp_drift_rc"
+fi
+
+# 27. Launcher pre-flight ABORTS when a preset-backed profile resolves to @preset
+#     but the preset GET returns an HTTP error (404 -> missing on the account).
+#     cfl_preset_check reads the http_code, so the stub prints the code for /presets.
+chkbin="$tmpstate/preset-chkbin"; mkdir -p "$chkbin"
+cat > "$chkbin/curl" <<'EOS'
+#!/usr/bin/env bash
+url=""
+for arg in "$@"; do case "$arg" in https://*) url="$arg" ;; esac; done
+case "$url" in
+  */api/v1/key) exit 0 ;;          # pre-flight connectivity/key check passes
+  */presets/*) printf '404' ;;     # preset GET -> HTTP 404 -> "not available"
+  *) exit 0 ;;
+esac
+EOS
+chmod +x "$chkbin/curl"
+chk_state="$tmpstate/preset-chk-state"; mkdir -p "$chk_state/claude-fusion/presets"
+printf '{"preset_slug":"cc-glm-fireworks"}' > "$chk_state/claude-fusion/presets/cc-glm-fireworks.json"
+chk_out="$(PATH="$chkbin:$fakebin:$PATH" XDG_CONFIG_HOME="$chk_state" bin/claude-fusion --profile glm-fireworks --key test -p hi 2>&1)"
+chk_rc=$?
+if [ "$chk_rc" -ne 0 ] && [[ "$chk_out" == *"not available on your OpenRouter account"* && "$chk_out" == *"./setup.sh --profile glm-fireworks"* ]]; then
+  ok "preflight aborts on missing preset"
+else
+  bad "preflight aborts on missing preset" "rc=$chk_rc $chk_out"
+fi
+
+# 27b. Launcher pre-flight PROCEEDS when the preset exists (HTTP 200).
+cat > "$chkbin/curl" <<'EOS'
+#!/usr/bin/env bash
+url=""
+for arg in "$@"; do case "$arg" in https://*) url="$arg" ;; esac; done
+case "$url" in
+  */api/v1/key) exit 0 ;;
+  */presets/*) printf '200' ;;
+  *) exit 0 ;;
+esac
+EOS
+chmod +x "$chkbin/curl"
+chk2_out="$(PATH="$chkbin:$fakebin:$PATH" XDG_CONFIG_HOME="$chk_state" bin/claude-fusion --profile glm-fireworks --key test -p hi 2>&1)"
+chk2_rc=$?
+if [ "$chk2_rc" -eq 0 ] && [[ "$chk2_out" != *"not available"* ]]; then
+  ok "preflight proceeds when preset exists"
+else
+  bad "preflight proceeds when preset exists" "rc=$chk2_rc $chk2_out"
+fi
+
+# 27c. On a transport/network error (no HTTP response) the pre-flight WARNS but does
+#      NOT abort — a blip must not be reported as 'preset not on your account'.
+cat > "$chkbin/curl" <<'EOS'
+#!/usr/bin/env bash
+url=""
+for arg in "$@"; do case "$arg" in https://*) url="$arg" ;; esac; done
+case "$url" in
+  */api/v1/key) exit 0 ;;
+  */presets/*) exit 7 ;;           # curl transport failure (no http_code) -> unknown
+  *) exit 0 ;;
+esac
+EOS
+chmod +x "$chkbin/curl"
+chk3_out="$(PATH="$chkbin:$fakebin:$PATH" XDG_CONFIG_HOME="$chk_state" bin/claude-fusion --profile glm-fireworks --key test -p hi 2>&1)"
+chk3_rc=$?
+if [ "$chk3_rc" -eq 0 ] && [[ "$chk3_out" == *"couldn't verify preset"* && "$chk3_out" != *"not available on your OpenRouter account"* ]]; then
+  ok "preflight warns (not abort) on network error"
+else
+  bad "preflight warns (not abort) on network error" "rc=$chk3_rc $chk3_out"
+fi
+
+# 27d. A retryable HTTP status (503) is treated as transient (warn + proceed), NOT as
+#      a missing preset — so an OpenRouter-side blip doesn't tell users to re-run setup.
+cat > "$chkbin/curl" <<'EOS'
+#!/usr/bin/env bash
+url=""
+for arg in "$@"; do case "$arg" in https://*) url="$arg" ;; esac; done
+case "$url" in
+  */api/v1/key) exit 0 ;;
+  */presets/*) printf '503' ;;     # transient server error -> unknown, not "missing"
+  *) exit 0 ;;
+esac
+EOS
+chmod +x "$chkbin/curl"
+chk4_out="$(PATH="$chkbin:$fakebin:$PATH" XDG_CONFIG_HOME="$chk_state" bin/claude-fusion --profile glm-fireworks --key test -p hi 2>&1)"
+chk4_rc=$?
+if [ "$chk4_rc" -eq 0 ] && [[ "$chk4_out" == *"couldn't verify preset"* && "$chk4_out" != *"not available on your OpenRouter account"* ]]; then
+  ok "preflight treats 5xx as transient"
+else
+  bad "preflight treats 5xx as transient" "rc=$chk4_rc $chk4_out"
+fi
 
 echo "----"
 [ "$fail" -eq 0 ] && echo "smoke: ALL PASS" || echo "smoke: FAILURES above"

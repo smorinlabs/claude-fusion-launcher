@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# setup.sh — one-time per-user setup: create your OpenRouter "cc-fusion" preset.
+# setup.sh — creates an OpenRouter preset for each fusion or preset profile in the config.
 set -euo pipefail
 
 # Resolve $0 through symlinks so setup works no matter where it's invoked from.
@@ -15,13 +15,16 @@ CFL_ROOT="$(cd -P "$(dirname "$_src")" && pwd)"
 
 key=""
 keyfile=""
+only_profile=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --key) key="${2:?--key needs a value}"; shift 2;;
     --key=*) key="${1#*=}"; shift;;
     --key-file) keyfile="${2:?--key-file needs a value}"; shift 2;;
     --key-file=*) keyfile="${1#*=}"; shift;;
-    -h|--help) echo "Usage: ./setup.sh [--key KEY | --key-file FILE]"; exit 0;;
+    --profile) only_profile="${2:?--profile needs a value}"; shift 2;;
+    --profile=*) only_profile="${1#*=}"; shift;;
+    -h|--help) echo "Usage: ./setup.sh [--profile NAME] [--key KEY | --key-file FILE]"; exit 0;;
     *) cfl_die "unknown argument: $1";;
   esac
 done
@@ -45,51 +48,123 @@ else
   cfl_die "OpenRouter rejected the key — check it is valid and not expired (via --key / --key-file / OPENROUTER_API_KEY)"
 fi
 
-slug="$(cfl_cfg '.preset_slug')"
-judge="$(cfl_cfg '.judge_model')"
-panel="$(jq -c '.panel_models' "$CFL_CONFIG")"
-
-echo "setup: creating OpenRouter preset '$slug'"
-echo "       panel: $(echo "$panel" | jq -r 'join(", ")')"
-echo "       judge: $judge"
-
-# A preset only activates fusion when its model is "openrouter/fusion" + a fusion
-# tools block; tool_choice:required drives the full custom-panel deliberation.
-body="$(jq -n --argjson panel "$panel" --arg judge "$judge" '{
-  model: "openrouter/fusion",
-  tools: [{ type: "openrouter:fusion", parameters: { analysis_models: $panel, model: $judge } }],
-  tool_choice: "required",
-  messages: [{ role: "user", content: "(ignored on preset create)" }]
-}')"
-
-resp="$(curl -sS "$OR_API/presets/$slug/chat/completions" \
-  -H "Authorization: Bearer $key" \
-  -H "Content-Type: application/json" \
-  -d "$body")"
-
-got_model="$(echo "$resp" | jq -r '.data.designated_version.config.model // empty' 2>/dev/null || true)"
-has_tool="$(echo "$resp" | jq -r '[.data.designated_version.config.tools[]?.type] | index("openrouter:fusion") // empty' 2>/dev/null || true)"
-
-if [ "$got_model" = "openrouter/fusion" ] && [ -n "$has_tool" ]; then
-  mkdir -p "$CFL_STATE_DIR"
-  jq -n --arg preset_slug "$slug" --arg verified_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-    '{preset_slug: $preset_slug, verified_at: $verified_at}' > "$CFL_PRESET_READY"
-  echo "setup: OK — preset '$slug' created (model=$got_model, fusion tool persisted)."
-  echo ""
-  echo "Next:"
-  echo "  bin/claude-fusion --mode subagent     # Opus main, fusion subagents (cheapest)"
-  echo "  bin/claude-fusion --mode main         # fusion main + subagents"
-  echo "  bin/claude-fusion --mode extreme      # everything fusion"
-  echo "  bin/claude-fusion --mode subagent -p \"...\"   # headless"
+# Decide which preset-backed profiles to create (type "fusion" or "preset").
+profiles_to_do=()
+if [ -n "$only_profile" ]; then
+  ptype="$(cfl_profile_type "$only_profile")"
+  [ -n "$ptype" ] || cfl_die "unknown profile '$only_profile' — available: $(cfl_cfg '.profiles | keys | join(", ")')"
+  if [ "$ptype" != "fusion" ] && [ "$ptype" != "preset" ]; then
+    echo "setup: profile '$only_profile' is type '$ptype' — nothing to set up (only fusion/preset profiles need a preset)."
+    exit 0
+  fi
+  profiles_to_do=("$only_profile")
 else
-  err="$(echo "$resp" | jq -r '.error.message // "unknown error (see response below)"' 2>/dev/null || echo "unknown error (see response below)")"
-  hint=""
-  case "$err" in
-    *redit*|*nsufficient*)                       hint="add credits at https://openrouter.ai/settings/credits";;
-    *nvalid*key*|*uthenticat*|*nauthor*|*xpired*) hint="the OpenRouter key looks invalid or expired";;
-    *not*found*|*o\ endpoints*|*o\ allowed*|*model*) hint="a panel model slug may be wrong — check config/modes.json against https://openrouter.ai/api/v1/models";;
-  esac
-  echo "$resp" | jq . >&2 2>/dev/null || echo "$resp" >&2
-  [ -n "$hint" ] && cfl_warn "hint: $hint"
-  cfl_die "preset creation failed: $err"
+  while IFS= read -r p; do [ -n "$p" ] && profiles_to_do+=("$p"); done < <(cfl_preset_backed_profiles)
+  [ "${#profiles_to_do[@]}" -gt 0 ] || cfl_die "no fusion/preset profiles in config — nothing to set up"
 fi
+
+mkdir -p "$CFL_STATE_DIR/presets"
+overall_fail=0
+for prof in "${profiles_to_do[@]}"; do
+  ptype="$(cfl_profile_type "$prof")"
+  # shellcheck disable=SC2016  # $p is a jq variable, not a bash expansion
+  slug="$(cfl_cfg --arg p "$prof" '.profiles[$p].preset_slug // empty')"
+  if [ -z "$slug" ]; then
+    cfl_warn "profile '$prof' (type $ptype) is missing preset_slug — skipping"
+    overall_fail=1
+    continue
+  fi
+  # Clear any stale readiness marker before we (re)try, so a failed attempt never
+  # leaves a preset looking ready — backend resolution only checks marker existence.
+  rm -f "$CFL_STATE_DIR/presets/$slug.json"
+
+  if [ "$ptype" = "fusion" ]; then
+    # shellcheck disable=SC2016  # $p is a jq variable, not a bash expansion
+    judge="$(cfl_cfg --arg p "$prof" '.profiles[$p].judge_model')"
+    panel="$(jq -c --arg p "$prof" '.profiles[$p].panel_models' "$CFL_CONFIG")"
+    echo "setup: creating OpenRouter preset '$slug' (profile '$prof', fusion)"
+    echo "       panel: $(echo "$panel" | jq -r 'join(", ")')"
+    echo "       judge: $judge"
+    body="$(jq -n --argjson panel "$panel" --arg judge "$judge" '{
+      model: "openrouter/fusion",
+      tools: [{ type: "openrouter:fusion", parameters: { analysis_models: $panel, model: $judge } }],
+      tool_choice: "required",
+      messages: [{ role: "user", content: "(ignored on preset create)" }]
+    }')"
+    expect_model="openrouter/fusion"
+  else
+    # shellcheck disable=SC2016  # $p is a jq variable, not a bash expansion
+    model="$(cfl_cfg --arg p "$prof" '.profiles[$p].model // empty')"
+    if [ -z "$model" ]; then
+      cfl_warn "preset profile '$prof' is missing model — skipping"
+      overall_fail=1
+      continue
+    fi
+    provider="$(jq -c --arg p "$prof" '.profiles[$p].provider // {}' "$CFL_CONFIG")"
+    echo "setup: creating OpenRouter preset '$slug' (profile '$prof', preset)"
+    echo "       model: $model"
+    echo "       provider: $provider"
+    body="$(jq -n --arg model "$model" --argjson provider "$provider" '{
+      model: $model,
+      provider: $provider,
+      messages: [{ role: "user", content: "(ignored on preset create)" }]
+    }')"
+    expect_model="$model"
+  fi
+
+  resp="$(curl -sS "$OR_API/presets/$slug/chat/completions" \
+    -H "Authorization: Bearer $key" \
+    -H "Content-Type: application/json" \
+    -d "$body")"
+
+  got_model="$(echo "$resp" | jq -r '.data.designated_version.config.model // empty' 2>/dev/null || true)"
+  ok=0
+  if [ "$ptype" = "fusion" ]; then
+    # Verify the persisted preset matches config on the same fields doctor diffs
+    # (panel + judge + tool_choice), so a silently-rewritten preset isn't marked ready.
+    has_tool="$(echo "$resp" | jq -r '[.data.designated_version.config.tools[]?.type] | index("openrouter:fusion") // empty' 2>/dev/null || true)"
+    live_panel="$(echo "$resp" | jq -r '[.data.designated_version.config.tools[]? | select(.type=="openrouter:fusion").parameters.analysis_models[]?] | join(", ")' 2>/dev/null || true)"
+    live_judge="$(echo "$resp" | jq -r '[.data.designated_version.config.tools[]? | select(.type=="openrouter:fusion").parameters.model][0] // empty' 2>/dev/null || true)"
+    live_tc="$(echo "$resp" | jq -r '.data.designated_version.config.tool_choice // empty' 2>/dev/null || true)"
+    cfg_panel="$(echo "$panel" | jq -r 'join(", ")')"
+    if [ "$got_model" = "$expect_model" ] && [ -n "$has_tool" ] \
+       && [ "$live_panel" = "$cfg_panel" ] && [ "$live_judge" = "$judge" ] && [ "$live_tc" = "required" ]; then
+      ok=1
+    fi
+  else
+    # Confirm the provider pin actually persisted, not just the model — otherwise a
+    # silently-dropped provider would look like success but route unpinned.
+    got_prov="$(echo "$resp" | jq -c '.data.designated_version.config.provider // {}' 2>/dev/null || echo '{}')"
+    if [ "$got_model" = "$expect_model" ] && cfl_provider_match "$got_prov" "$provider"; then ok=1; fi
+  fi
+
+  if [ "$ok" = "1" ]; then
+    jq -n --arg preset_slug "$slug" --arg verified_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+      '{preset_slug: $preset_slug, verified_at: $verified_at}' > "$CFL_STATE_DIR/presets/$slug.json"
+    echo "setup: OK — preset '$slug' created (model=$got_model)."
+  else
+    err="$(echo "$resp" | jq -r '.error.message // "unknown error (see response below)"' 2>/dev/null || echo "unknown error (see response below)")"
+    hint=""
+    case "$err" in
+      *redit*|*nsufficient*)                        hint="add credits at https://openrouter.ai/settings/credits";;
+      *nvalid*key*|*uthenticat*|*nauthor*|*xpired*) hint="the OpenRouter key looks invalid or expired";;
+      *not*found*|*o\ endpoints*|*o\ allowed*|*model*) hint="a panel model slug may be wrong — check config against https://openrouter.ai/api/v1/models";;
+    esac
+    echo "$resp" | jq . >&2 2>/dev/null || echo "$resp" >&2
+    [ -n "$hint" ] && cfl_warn "hint: $hint"
+    cfl_warn "preset creation failed for '$slug': $err"
+    overall_fail=1
+  fi
+done
+
+if [ "$overall_fail" -ne 0 ]; then
+  cfl_die "preset creation failed (see messages above)"
+fi
+
+echo ""
+echo "Next:"
+echo "  bin/claude-fusion profiles                 # list profiles"
+for _prof in "${profiles_to_do[@]}"; do
+  echo "  bin/claude-fusion --profile $_prof         # use the profile just set up"
+done
+echo "  bin/claude-fusion --profile <model-alias> -p \"...\"   # model aliases (e.g. deepseek) need no setup"
