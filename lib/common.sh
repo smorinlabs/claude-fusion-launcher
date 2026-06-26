@@ -169,13 +169,29 @@ cfl_or_get() { curl -fsS --connect-timeout 5 --max-time 15 "$OR_API/$2" -H "Auth
 # cfl_credits_usage <key> — print cumulative account usage ($) as a number.
 cfl_credits_usage() { cfl_or_get "$1" "credits" | jq -r '.data.total_usage // empty'; }
 
-# cfl_preset_check <key> <slug> — true iff the OpenRouter preset <slug> exists and
-# looks valid (its designated version carries a model) for this key. Used as a
-# pre-flight so a missing/deleted preset is caught before launching Claude Code.
+# cfl_preset_check <key> <slug> — pre-flight preset existence check. Distinguishes
+# a missing preset (HTTP error) from a transient network failure so the launcher
+# only hard-aborts on the former. Returns:
+#   0 = preset exists (HTTP 2xx)
+#   1 = HTTP error (e.g. 404) — preset not available on this account
+#   2 = transport/network error (no HTTP response) — existence unknown
 cfl_preset_check() {
-  local resp
-  resp="$(cfl_or_get "$1" "presets/$2" 2>/dev/null)" || return 1
-  printf '%s' "$resp" | jq -e '.data.designated_version.config.model // empty' >/dev/null 2>&1
+  local code
+  code="$(curl -sS -o /dev/null -w '%{http_code}' --connect-timeout 5 --max-time 15 \
+    "$OR_API/presets/$2" -H "Authorization: Bearer $1" 2>/dev/null)" || true
+  case "$code" in
+    2*)      return 0 ;;
+    ''|000)  return 2 ;;
+    *)       return 1 ;;
+  esac
+}
+
+# cfl_provider_match <live_provider_json> <cfg_provider_json> — true iff every key
+# the config sets on the provider object equals the same key in the live preset.
+# Extra/reordered fields OpenRouter may add are ignored, so they don't read as drift.
+cfl_provider_match() {
+  jq -ne --argjson live "$1" --argjson cfg "$2" \
+    '[$cfg | to_entries[] | $live[.key] == .value] | all' >/dev/null 2>&1
 }
 
 # cfl_list_modes — print the modes from config with their slot mappings.
@@ -244,7 +260,8 @@ cfl_doctor() {
           [ -n "$prof" ] || continue
           ptype="$(cfl_profile_type "$prof")"
           # shellcheck disable=SC2016  # $p is a jq variable, not a bash expansion
-          slug="$(cfl_cfg --arg p "$prof" '.profiles[$p].preset_slug')"
+          slug="$(cfl_cfg --arg p "$prof" '.profiles[$p].preset_slug // empty')"
+          [ -n "$slug" ] || { _d_warn "profile '$prof' (type $ptype) has no preset_slug in config" "add a preset_slug to the profile"; continue; }
           if pinfo="$(cfl_or_get "$key" "presets/$slug" 2>/dev/null)"; then
             pm="$(printf '%s' "$pinfo" | jq -r '.data.designated_version.config.model // empty')"
             if [ "$ptype" = "fusion" ]; then
@@ -292,7 +309,7 @@ cfl_doctor() {
                 cfg_prov="$(jq -c --arg p "$prof" '.profiles[$p].provider // {}' "$CFL_CONFIG")"
                 _d_det "model: $pm"
                 _d_det "provider: $live_prov"
-                if [ "$live_prov" = "$cfg_prov" ]; then
+                if cfl_provider_match "$live_prov" "$cfg_prov"; then
                   _d_ok "preset '$slug' matches config (model + provider in sync)"
                 else
                   _d_warn "preset '$slug' differs from config — re-run ./setup.sh to sync"

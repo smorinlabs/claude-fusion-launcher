@@ -402,7 +402,8 @@ case "$url" in
   */presets/*/chat/completions)
     printf '%s\n' "$body" >> "$PRESET_BODY_LOG"
     m="$(printf '%s' "$body" | jq -r '.model // "openrouter/fusion"')"
-    printf '{"data":{"designated_version":{"config":{"model":"%s"}}}}' "$m" ;;
+    prov="$(printf '%s' "$body" | jq -c '.provider // {}')"
+    printf '{"data":{"designated_version":{"config":{"model":"%s","provider":%s}}}}' "$m" "$prov" ;;
   *) printf '{"error":{"message":"unexpected URL"}}' ;;
 esac
 EOS
@@ -530,7 +531,8 @@ else
 fi
 
 # 27. Launcher pre-flight ABORTS when a preset-backed profile resolves to @preset
-#     but the preset is missing on the account (stub: /key ok, /presets/* fails).
+#     but the preset GET returns an HTTP error (404 -> missing on the account).
+#     cfl_preset_check reads the http_code, so the stub prints the code for /presets.
 chkbin="$tmpstate/preset-chkbin"; mkdir -p "$chkbin"
 cat > "$chkbin/curl" <<'EOS'
 #!/usr/bin/env bash
@@ -538,7 +540,7 @@ url=""
 for arg in "$@"; do case "$arg" in https://*) url="$arg" ;; esac; done
 case "$url" in
   */api/v1/key) exit 0 ;;          # pre-flight connectivity/key check passes
-  */presets/*) exit 22 ;;          # preset GET fails -> "not available"
+  */presets/*) printf '404' ;;     # preset GET -> HTTP 404 -> "not available"
   *) exit 0 ;;
 esac
 EOS
@@ -553,14 +555,14 @@ else
   bad "preflight aborts on missing preset" "rc=$chk_rc $chk_out"
 fi
 
-# 27b. Launcher pre-flight PROCEEDS when the preset exists (stub returns a valid preset).
+# 27b. Launcher pre-flight PROCEEDS when the preset exists (HTTP 200).
 cat > "$chkbin/curl" <<'EOS'
 #!/usr/bin/env bash
 url=""
 for arg in "$@"; do case "$arg" in https://*) url="$arg" ;; esac; done
 case "$url" in
   */api/v1/key) exit 0 ;;
-  */presets/*) printf '{"data":{"designated_version":{"config":{"model":"z-ai/glm-5.2"}}}}' ;;
+  */presets/*) printf '200' ;;
   *) exit 0 ;;
 esac
 EOS
@@ -571,6 +573,27 @@ if [ "$chk2_rc" -eq 0 ] && [[ "$chk2_out" != *"not available"* ]]; then
   ok "preflight proceeds when preset exists"
 else
   bad "preflight proceeds when preset exists" "rc=$chk2_rc $chk2_out"
+fi
+
+# 27c. On a transport/network error (no HTTP response) the pre-flight WARNS but does
+#      NOT abort — a blip must not be reported as 'preset not on your account'.
+cat > "$chkbin/curl" <<'EOS'
+#!/usr/bin/env bash
+url=""
+for arg in "$@"; do case "$arg" in https://*) url="$arg" ;; esac; done
+case "$url" in
+  */api/v1/key) exit 0 ;;
+  */presets/*) exit 7 ;;           # curl transport failure (no http_code) -> unknown
+  *) exit 0 ;;
+esac
+EOS
+chmod +x "$chkbin/curl"
+chk3_out="$(PATH="$chkbin:$fakebin:$PATH" XDG_CONFIG_HOME="$chk_state" bin/claude-fusion --profile glm-fireworks --key test -p hi 2>&1)"
+chk3_rc=$?
+if [ "$chk3_rc" -eq 0 ] && [[ "$chk3_out" == *"couldn't verify preset"* && "$chk3_out" != *"not available on your OpenRouter account"* ]]; then
+  ok "preflight warns (not abort) on network error"
+else
+  bad "preflight warns (not abort) on network error" "rc=$chk3_rc $chk3_out"
 fi
 
 echo "----"

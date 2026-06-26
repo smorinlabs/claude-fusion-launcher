@@ -149,6 +149,7 @@ cfl_load_config
 mode="$(cfl_resolve_mode "$mode")"
 if [ "$backend_set" -eq 0 ]; then
   profile="$(cfl_resolve_profile "$profile")"
+  [ -n "$profile" ] || cfl_die "no profile given and no .default_profile in config — use --profile NAME, --backend SLUG, or set default_profile in $CFL_CONFIG"
 fi
 settings="$(cfl_render_settings "$mode" "$profile" "$backend")"
 
@@ -195,7 +196,15 @@ if [ -z "${CFL_SKIP_PRECHECK:-}" ] && [ "$backend_set" -eq 0 ]; then
   case "$fref" in
     @preset/*)
       cslug="${fref#@preset/}"
-      cfl_preset_check "$key" "$cslug" || cfl_die "preset '$cslug' (profile '$profile') is not available on your OpenRouter account — run: ./setup.sh --profile $profile  (then retry; or 'claude-fusion doctor' to diagnose, or CFL_SKIP_PRECHECK=1 to bypass)"
+      # `|| _pcrc=$?` keeps the non-zero return from tripping `set -e` while still
+      # capturing the specific code (1 = missing, 2 = unreachable).
+      _pcrc=0
+      cfl_preset_check "$key" "$cslug" || _pcrc=$?
+      if [ "$_pcrc" -eq 1 ]; then
+        cfl_die "preset '$cslug' (profile '$profile') is not available on your OpenRouter account — run: ./setup.sh --profile $profile  (then retry; or 'claude-fusion doctor' to diagnose, or CFL_SKIP_PRECHECK=1 to bypass)"
+      elif [ "$_pcrc" -eq 2 ]; then
+        cfl_warn "couldn't verify preset '$cslug' (OpenRouter unreachable) — launching anyway; run 'claude-fusion doctor' if Claude errors"
+      fi
       ;;
   esac
 fi

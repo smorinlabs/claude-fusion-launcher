@@ -110,7 +110,10 @@ for prof in "${profiles_to_do[@]}"; do
     has_tool="$(echo "$resp" | jq -r '[.data.designated_version.config.tools[]?.type] | index("openrouter:fusion") // empty' 2>/dev/null || true)"
     [ "$got_model" = "$expect_model" ] && [ -n "$has_tool" ] && ok=1
   else
-    [ "$got_model" = "$expect_model" ] && ok=1
+    # Confirm the provider pin actually persisted, not just the model — otherwise a
+    # silently-dropped provider would look like success but route unpinned.
+    got_prov="$(echo "$resp" | jq -c '.data.designated_version.config.provider // {}' 2>/dev/null || echo '{}')"
+    if [ "$got_model" = "$expect_model" ] && cfl_provider_match "$got_prov" "$provider"; then ok=1; fi
   fi
 
   if [ "$ok" = "1" ]; then
