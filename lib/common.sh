@@ -169,6 +169,15 @@ cfl_or_get() { curl -fsS --connect-timeout 5 --max-time 15 "$OR_API/$2" -H "Auth
 # cfl_credits_usage <key> — print cumulative account usage ($) as a number.
 cfl_credits_usage() { cfl_or_get "$1" "credits" | jq -r '.data.total_usage // empty'; }
 
+# cfl_preset_check <key> <slug> — true iff the OpenRouter preset <slug> exists and
+# looks valid (its designated version carries a model) for this key. Used as a
+# pre-flight so a missing/deleted preset is caught before launching Claude Code.
+cfl_preset_check() {
+  local resp
+  resp="$(cfl_or_get "$1" "presets/$2" 2>/dev/null)" || return 1
+  printf '%s' "$resp" | jq -e '.data.designated_version.config.model // empty' >/dev/null 2>&1
+}
+
 # cfl_list_modes — print the modes from config with their slot mappings.
 cfl_list_modes() {
   echo "Modes (config: $CFL_CONFIG):"

@@ -160,6 +160,8 @@ Repo tasks (run as `make <t>` or `just <t>`): `check` (verify deps) · `lint` (s
 
 Before launching Claude, the launcher runs a fast pre-flight: if OpenRouter is unreachable or your key is rejected, it prints a one-line hint to run `claude-fusion doctor` — so you aren't surprised by cryptic mid-session errors. Silent on success. Disable with `CFL_SKIP_PRECHECK=1`.
 
+It also **verifies preset-backed profiles**: when the active profile resolves to an `@preset/<slug>` (any `fusion` or `preset` profile whose preset has been set up), the launcher confirms that preset still exists on your account with a free, no-inference `GET /presets/<slug>`. If it's missing or deleted, the launcher aborts before starting Claude with a fix hint (`run ./setup.sh --profile <name>`) instead of failing mid-session. Also skipped by `CFL_SKIP_PRECHECK=1`.
+
 ---
 
 ## Cost & latency

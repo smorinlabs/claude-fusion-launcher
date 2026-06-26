@@ -170,11 +170,11 @@ fi
 
 cfl_require claude curl
 key="$(cfl_resolve_key "$key" "$keyfile")"
-if [ "$backend_set" -eq 0 ] && [ "$(cfl_profile_type "$profile")" = "fusion" ]; then
+ptype="$(cfl_profile_type "$profile")"
+if [ "$backend_set" -eq 0 ] && { [ "$ptype" = "fusion" ] || [ "$ptype" = "preset" ]; }; then
   # shellcheck disable=SC2016  # $p is a jq variable, not a bash expansion
   pslug="$(cfl_cfg --arg p "$profile" '.profiles[$p].preset_slug // empty')"
-  # shellcheck disable=SC2016  # $p is a jq variable, not a bash expansion
-  cfl_preset_ready "$pslug" || cfl_warn "preset not set up for profile '$profile' (slug '$pslug') — using fallback '$(cfl_cfg --arg p "$profile" '.profiles[$p].fallback // "openrouter/fusion"')'. Run ./setup.sh."
+  cfl_preset_ready "$pslug" || cfl_warn "preset not set up for profile '$profile' (slug '$pslug') — using fallback '$(cfl_backend_ref "$profile" "")'. Run ./setup.sh --profile $profile."
 fi
 
 # Pre-flight: warn early (with a doctor hint) if OpenRouter is unreachable or the
@@ -184,6 +184,20 @@ fi
 # CFL_SKIP_PRECHECK=1.)
 if [ -z "${CFL_SKIP_PRECHECK:-}" ] && [ -x "$CFL_ROOT/lib/check-openrouter.sh" ]; then
   OPENROUTER_API_KEY="$key" "$CFL_ROOT/lib/check-openrouter.sh" || true
+fi
+
+# Pre-flight: when the resolved backend is a preset (@preset/<slug>), confirm the
+# preset actually exists on the account before launching — otherwise Claude Code
+# would fail mid-session. A missing preset aborts here with a fix hint. Skip with
+# CFL_SKIP_PRECHECK=1.
+if [ -z "${CFL_SKIP_PRECHECK:-}" ] && [ "$backend_set" -eq 0 ]; then
+  fref="$(cfl_backend_ref "$profile" "")"
+  case "$fref" in
+    @preset/*)
+      cslug="${fref#@preset/}"
+      cfl_preset_check "$key" "$cslug" || cfl_die "preset '$cslug' (profile '$profile') is not available on your OpenRouter account — run: ./setup.sh --profile $profile  (then retry; or 'claude-fusion doctor' to diagnose, or CFL_SKIP_PRECHECK=1 to bypass)"
+      ;;
+  esac
 fi
 
 # --cost: measure OpenRouter spend across the session (assumes one session at a time).

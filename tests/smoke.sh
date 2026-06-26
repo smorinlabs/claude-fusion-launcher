@@ -529,6 +529,50 @@ else
   bad "doctor covers preset profiles" "drift_rc=$dp_drift_rc"
 fi
 
+# 27. Launcher pre-flight ABORTS when a preset-backed profile resolves to @preset
+#     but the preset is missing on the account (stub: /key ok, /presets/* fails).
+chkbin="$tmpstate/preset-chkbin"; mkdir -p "$chkbin"
+cat > "$chkbin/curl" <<'EOS'
+#!/usr/bin/env bash
+url=""
+for arg in "$@"; do case "$arg" in https://*) url="$arg" ;; esac; done
+case "$url" in
+  */api/v1/key) exit 0 ;;          # pre-flight connectivity/key check passes
+  */presets/*) exit 22 ;;          # preset GET fails -> "not available"
+  *) exit 0 ;;
+esac
+EOS
+chmod +x "$chkbin/curl"
+chk_state="$tmpstate/preset-chk-state"; mkdir -p "$chk_state/claude-fusion/presets"
+printf '{"preset_slug":"cc-glm-fireworks"}' > "$chk_state/claude-fusion/presets/cc-glm-fireworks.json"
+chk_out="$(PATH="$chkbin:$fakebin:$PATH" XDG_CONFIG_HOME="$chk_state" bin/claude-fusion --profile glm-fireworks --key test -p hi 2>&1)"
+chk_rc=$?
+if [ "$chk_rc" -ne 0 ] && [[ "$chk_out" == *"not available on your OpenRouter account"* && "$chk_out" == *"./setup.sh --profile glm-fireworks"* ]]; then
+  ok "preflight aborts on missing preset"
+else
+  bad "preflight aborts on missing preset" "rc=$chk_rc $chk_out"
+fi
+
+# 27b. Launcher pre-flight PROCEEDS when the preset exists (stub returns a valid preset).
+cat > "$chkbin/curl" <<'EOS'
+#!/usr/bin/env bash
+url=""
+for arg in "$@"; do case "$arg" in https://*) url="$arg" ;; esac; done
+case "$url" in
+  */api/v1/key) exit 0 ;;
+  */presets/*) printf '{"data":{"designated_version":{"config":{"model":"z-ai/glm-5.2"}}}}' ;;
+  *) exit 0 ;;
+esac
+EOS
+chmod +x "$chkbin/curl"
+chk2_out="$(PATH="$chkbin:$fakebin:$PATH" XDG_CONFIG_HOME="$chk_state" bin/claude-fusion --profile glm-fireworks --key test -p hi 2>&1)"
+chk2_rc=$?
+if [ "$chk2_rc" -eq 0 ] && [[ "$chk2_out" != *"not available"* ]]; then
+  ok "preflight proceeds when preset exists"
+else
+  bad "preflight proceeds when preset exists" "rc=$chk2_rc $chk2_out"
+fi
+
 echo "----"
 [ "$fail" -eq 0 ] && echo "smoke: ALL PASS" || echo "smoke: FAILURES above"
 exit "$fail"
