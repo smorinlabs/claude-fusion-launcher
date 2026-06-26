@@ -306,6 +306,43 @@ else
   bad "setup handles non-JSON preset response" "$setup_out"
 fi
 
+# 22b. Setup creates a preset per fusion profile and writes a per-slug marker each.
+okbin="$tmpstate/setup-okbin"; mkdir -p "$okbin"
+cat > "$okbin/curl" <<'EOS'
+#!/usr/bin/env bash
+url=""
+for arg in "$@"; do
+  case "$arg" in https://*) url="$arg" ;; esac
+done
+case "$url" in
+  */key) printf '{"data":{"label":"smoke"}}' ;;
+  */credits) printf '{"data":{"total_credits":10,"total_usage":1}}' ;;
+  */presets/*/chat/completions)
+    printf '{"data":{"designated_version":{"config":{"model":"openrouter/fusion","tools":[{"type":"openrouter:fusion"}]}}}}' ;;
+  *) printf '{"error":{"message":"unexpected URL"}}' ;;
+esac
+EOS
+chmod +x "$okbin/curl"
+two_cfg="$(mktemp)"
+jq '.profiles["fusion2"] = {"type":"fusion","preset_slug":"cc-fusion-2","panel_models":["deepseek/deepseek-v3.2"],"judge_model":"deepseek/deepseek-v3.2","fallback":"openrouter/fusion"}' "$CFL_CONFIG" > "$two_cfg"
+ok_state="$tmpstate/setup-ok-state"
+ok_out="$(PATH="$okbin:$PATH" XDG_CONFIG_HOME="$ok_state" CLAUDE_FUSION_CONFIG="$two_cfg" ./setup.sh --key test 2>&1)"
+if [ -f "$ok_state/claude-fusion/presets/cc-fusion.json" ] && [ -f "$ok_state/claude-fusion/presets/cc-fusion-2.json" ]; then
+  ok "setup creates a marker per fusion profile"
+else
+  bad "setup creates a marker per fusion profile" "$ok_out"
+fi
+
+# 22c. setup --profile <model-profile> creates nothing and exits 0.
+skip_out="$(PATH="$okbin:$PATH" XDG_CONFIG_HOME="$tmpstate/setup-skip-state" CLAUDE_FUSION_CONFIG="$two_cfg" ./setup.sh --profile deepseek --key test 2>&1)"
+skip_rc=$?
+if [ "$skip_rc" -eq 0 ] && [[ "$skip_out" == *"nothing to set up"* ]] && [ ! -d "$tmpstate/setup-skip-state/claude-fusion/presets" ]; then
+  ok "setup --profile model skips"
+else
+  bad "setup --profile model skips" "rc=$skip_rc $skip_out"
+fi
+rm -f "$two_cfg"
+
 # 23. gitleaks hook falls back to the older protect --staged syntax.
 gitleaksbin="$tmpstate/gitleaksbin"; mkdir -p "$gitleaksbin"
 gitleaks_log="$tmpstate/gitleaks.log"

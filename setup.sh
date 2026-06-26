@@ -15,13 +15,16 @@ CFL_ROOT="$(cd -P "$(dirname "$_src")" && pwd)"
 
 key=""
 keyfile=""
+only_profile=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --key) key="${2:?--key needs a value}"; shift 2;;
     --key=*) key="${1#*=}"; shift;;
     --key-file) keyfile="${2:?--key-file needs a value}"; shift 2;;
     --key-file=*) keyfile="${1#*=}"; shift;;
-    -h|--help) echo "Usage: ./setup.sh [--key KEY | --key-file FILE]"; exit 0;;
+    --profile) only_profile="${2:?--profile needs a value}"; shift 2;;
+    --profile=*) only_profile="${1#*=}"; shift;;
+    -h|--help) echo "Usage: ./setup.sh [--profile NAME] [--key KEY | --key-file FILE]"; exit 0;;
     *) cfl_die "unknown argument: $1";;
   esac
 done
@@ -45,51 +48,75 @@ else
   cfl_die "OpenRouter rejected the key — check it is valid and not expired (via --key / --key-file / OPENROUTER_API_KEY)"
 fi
 
-slug="$(cfl_cfg '.preset_slug')"
-judge="$(cfl_cfg '.judge_model')"
-panel="$(jq -c '.panel_models' "$CFL_CONFIG")"
-
-echo "setup: creating OpenRouter preset '$slug'"
-echo "       panel: $(echo "$panel" | jq -r 'join(", ")')"
-echo "       judge: $judge"
-
-# A preset only activates fusion when its model is "openrouter/fusion" + a fusion
-# tools block; tool_choice:required drives the full custom-panel deliberation.
-body="$(jq -n --argjson panel "$panel" --arg judge "$judge" '{
-  model: "openrouter/fusion",
-  tools: [{ type: "openrouter:fusion", parameters: { analysis_models: $panel, model: $judge } }],
-  tool_choice: "required",
-  messages: [{ role: "user", content: "(ignored on preset create)" }]
-}')"
-
-resp="$(curl -sS "$OR_API/presets/$slug/chat/completions" \
-  -H "Authorization: Bearer $key" \
-  -H "Content-Type: application/json" \
-  -d "$body")"
-
-got_model="$(echo "$resp" | jq -r '.data.designated_version.config.model // empty' 2>/dev/null || true)"
-has_tool="$(echo "$resp" | jq -r '[.data.designated_version.config.tools[]?.type] | index("openrouter:fusion") // empty' 2>/dev/null || true)"
-
-if [ "$got_model" = "openrouter/fusion" ] && [ -n "$has_tool" ]; then
-  mkdir -p "$CFL_STATE_DIR"
-  jq -n --arg preset_slug "$slug" --arg verified_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-    '{preset_slug: $preset_slug, verified_at: $verified_at}' > "$CFL_PRESET_READY"
-  echo "setup: OK — preset '$slug' created (model=$got_model, fusion tool persisted)."
-  echo ""
-  echo "Next:"
-  echo "  bin/claude-fusion --mode subagent     # Opus main, fusion subagents (cheapest)"
-  echo "  bin/claude-fusion --mode main         # fusion main + subagents"
-  echo "  bin/claude-fusion --mode extreme      # everything fusion"
-  echo "  bin/claude-fusion --mode subagent -p \"...\"   # headless"
+# Decide which fusion profiles to create.
+profiles_to_do=()
+if [ -n "$only_profile" ]; then
+  ptype="$(cfl_profile_type "$only_profile")"
+  [ -n "$ptype" ] || cfl_die "unknown profile '$only_profile' — available: $(cfl_cfg '.profiles | keys | join(", ")')"
+  if [ "$ptype" != "fusion" ]; then
+    echo "setup: profile '$only_profile' is type '$ptype' — nothing to set up (only fusion profiles need a preset)."
+    exit 0
+  fi
+  profiles_to_do=("$only_profile")
 else
-  err="$(echo "$resp" | jq -r '.error.message // "unknown error (see response below)"' 2>/dev/null || echo "unknown error (see response below)")"
-  hint=""
-  case "$err" in
-    *redit*|*nsufficient*)                       hint="add credits at https://openrouter.ai/settings/credits";;
-    *nvalid*key*|*uthenticat*|*nauthor*|*xpired*) hint="the OpenRouter key looks invalid or expired";;
-    *not*found*|*o\ endpoints*|*o\ allowed*|*model*) hint="a panel model slug may be wrong — check config/modes.json against https://openrouter.ai/api/v1/models";;
-  esac
-  echo "$resp" | jq . >&2 2>/dev/null || echo "$resp" >&2
-  [ -n "$hint" ] && cfl_warn "hint: $hint"
-  cfl_die "preset creation failed: $err"
+  while IFS= read -r p; do [ -n "$p" ] && profiles_to_do+=("$p"); done < <(cfl_fusion_profiles)
+  [ "${#profiles_to_do[@]}" -gt 0 ] || cfl_die "no fusion profiles in config — nothing to set up"
 fi
+
+mkdir -p "$CFL_STATE_DIR/presets"
+overall_fail=0
+for prof in "${profiles_to_do[@]}"; do
+  # shellcheck disable=SC2016  # $p is a jq variable, not a bash expansion
+  slug="$(cfl_cfg --arg p "$prof" '.profiles[$p].preset_slug')"
+  # shellcheck disable=SC2016  # $p is a jq variable, not a bash expansion
+  judge="$(cfl_cfg --arg p "$prof" '.profiles[$p].judge_model')"
+  panel="$(jq -c --arg p "$prof" '.profiles[$p].panel_models' "$CFL_CONFIG")"
+
+  echo "setup: creating OpenRouter preset '$slug' (profile '$prof')"
+  echo "       panel: $(echo "$panel" | jq -r 'join(", ")')"
+  echo "       judge: $judge"
+
+  body="$(jq -n --argjson panel "$panel" --arg judge "$judge" '{
+    model: "openrouter/fusion",
+    tools: [{ type: "openrouter:fusion", parameters: { analysis_models: $panel, model: $judge } }],
+    tool_choice: "required",
+    messages: [{ role: "user", content: "(ignored on preset create)" }]
+  }')"
+
+  resp="$(curl -sS "$OR_API/presets/$slug/chat/completions" \
+    -H "Authorization: Bearer $key" \
+    -H "Content-Type: application/json" \
+    -d "$body")"
+
+  got_model="$(echo "$resp" | jq -r '.data.designated_version.config.model // empty' 2>/dev/null || true)"
+  has_tool="$(echo "$resp" | jq -r '[.data.designated_version.config.tools[]?.type] | index("openrouter:fusion") // empty' 2>/dev/null || true)"
+
+  if [ "$got_model" = "openrouter/fusion" ] && [ -n "$has_tool" ]; then
+    jq -n --arg preset_slug "$slug" --arg verified_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+      '{preset_slug: $preset_slug, verified_at: $verified_at}' > "$CFL_STATE_DIR/presets/$slug.json"
+    echo "setup: OK — preset '$slug' created (model=$got_model, fusion tool persisted)."
+  else
+    err="$(echo "$resp" | jq -r '.error.message // "unknown error (see response below)"' 2>/dev/null || echo "unknown error (see response below)")"
+    hint=""
+    case "$err" in
+      *redit*|*nsufficient*)                        hint="add credits at https://openrouter.ai/settings/credits";;
+      *nvalid*key*|*uthenticat*|*nauthor*|*xpired*) hint="the OpenRouter key looks invalid or expired";;
+      *not*found*|*o\ endpoints*|*o\ allowed*|*model*) hint="a panel model slug may be wrong — check config against https://openrouter.ai/api/v1/models";;
+    esac
+    echo "$resp" | jq . >&2 2>/dev/null || echo "$resp" >&2
+    [ -n "$hint" ] && cfl_warn "hint: $hint"
+    cfl_warn "preset creation failed for '$slug': $err"
+    overall_fail=1
+  fi
+done
+
+if [ "$overall_fail" -ne 0 ]; then
+  cfl_die "preset creation failed (see messages above)"
+fi
+
+echo ""
+echo "Next:"
+echo "  bin/claude-fusion profiles                 # list profiles"
+echo "  bin/claude-fusion --profile fusion         # fusion backend, default mode (extreme)"
+echo "  bin/claude-fusion --profile fusion --mode subagent   # fusion only in subagents"
+echo "  bin/claude-fusion --profile deepseek -p \"...\"        # a model-alias profile (no setup needed)"
