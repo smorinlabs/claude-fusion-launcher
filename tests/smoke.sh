@@ -214,8 +214,8 @@ fi
 # Build an in-sync preset straight from the config so the diff has nothing to flag,
 # and a drifted variant (one panel model swapped) that must warn but NOT fail.
 synced_preset="$(jq -nc \
-  --argjson panel "$(jq -c '.panel_models' "$CFL_CONFIG")" \
-  --arg judge "$(jq -r '.judge_model' "$CFL_CONFIG")" \
+  --argjson panel "$(jq -c '.profiles.fusion.panel_models' "$CFL_CONFIG")" \
+  --arg judge "$(jq -r '.profiles.fusion.judge_model' "$CFL_CONFIG")" \
   '{data:{designated_version:{config:{model:"openrouter/fusion",tool_choice:"required",
     tools:[{type:"openrouter:fusion",parameters:{model:$judge,analysis_models:$panel}}]}}}}')"
 drift_preset="$(printf '%s' "$synced_preset" \
@@ -265,6 +265,7 @@ if [[ "$doctor_ok_out" == *"key resolved (…test)"* \
   && "$doctor_ok_out" == *"qwen/qwen3-coder-plus"* \
   && "$doctor_ok_out" == *"tool_choice: required"* \
   && "$doctor_ok_out" == *"matches config"* \
+  && "$doctor_ok_out" == *"fusion (fusion):"* \
   && "$doctor_drift_out" == *'source: env $OPENROUTER_API_KEY'* \
   && "$doctor_drift_out" == *"differs from config"* && "$doctor_drift_out" == *"zzz/drifted-model"* \
   && "$drift_rc" -eq 0 \
