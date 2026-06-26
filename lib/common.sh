@@ -77,13 +77,14 @@ cfl_profile_type() { cfl_cfg --arg p "$1" '.profiles[$p].type // empty'; }
 # cfl_preset_ready <slug> — true iff the per-slug readiness marker exists.
 cfl_preset_ready() { [ -f "$CFL_STATE_DIR/presets/$1.json" ]; }
 
-# cfl_fusion_profiles — names of all type:"fusion" profiles, one per line.
-cfl_fusion_profiles() {
-  cfl_cfg '.profiles | to_entries[] | select(.value.type=="fusion") | .key'
+# cfl_preset_backed_profiles — names of all profiles that need an OpenRouter
+# preset created (type "fusion" or "preset"), one per line.
+cfl_preset_backed_profiles() {
+  cfl_cfg '.profiles | to_entries[] | select(.value.type=="fusion" or .value.type=="preset") | .key'
 }
 
 # cfl_profile_backend_ref <profile> — resolve a NAMED profile to its backend
-# string. fusion -> @preset/<slug> when ready else fallback; model -> the slug.
+# string. fusion/preset -> @preset/<slug> when ready else fallback; model -> slug.
 cfl_profile_backend_ref() {
   local p="$1" type
   type="$(cfl_profile_type "$p")"
@@ -94,6 +95,14 @@ cfl_profile_backend_ref() {
       local slug fallback
       slug="$(cfl_cfg --arg p "$p" '.profiles[$p].preset_slug // empty')"
       fallback="$(cfl_cfg --arg p "$p" '.profiles[$p].fallback // "openrouter/fusion"')"
+      if [ -n "$slug" ] && cfl_preset_ready "$slug"; then printf '@preset/%s' "$slug"; else printf '%s' "$fallback"; fi
+      ;;
+    preset)
+      # A provider-pinned (or parameterized) preset; before setup it falls back to
+      # its bare model (unpinned), so the profile still works without ./setup.sh.
+      local slug fallback
+      slug="$(cfl_cfg --arg p "$p" '.profiles[$p].preset_slug // empty')"
+      fallback="$(cfl_cfg --arg p "$p" '.profiles[$p].fallback // .profiles[$p].model // empty')"
       if [ -n "$slug" ] && cfl_preset_ready "$slug"; then printf '@preset/%s' "$slug"; else printf '%s' "$fallback"; fi
       ;;
     *) cfl_die "unknown profile '$p' — available: $(cfl_cfg '.profiles | keys | join(", ")')" ;;
@@ -113,6 +122,7 @@ cfl_list_profiles() {
   echo "Profiles (config: $CFL_CONFIG):"
   jq -r '.profiles | to_entries[]
     | if   .value.type=="fusion" then "  \(.key) (fusion): @preset/\(.value.preset_slug) — \(.value.panel_models|length)-model panel, judge \(.value.judge_model)"
+      elif .value.type=="preset" then "  \(.key) (preset): @preset/\(.value.preset_slug) — \(.value.model) via provider \((.value.provider.only // .value.provider.order // []) | join(", "))"
       elif .value.type=="model"  then "  \(.key) (model): \(.value.model)"
       else "  \(.key) (unknown type)" end' "$CFL_CONFIG"
   printf '  default_profile: %s   default_mode: %s\n' "$(cfl_cfg '.default_profile // "—"')" "$(cfl_cfg '.default_mode // "extreme"')"
@@ -220,48 +230,74 @@ cfl_doctor() {
             _d_warn "low credits: \$$rem remaining" "add credits at https://openrouter.ai/settings/credits"
           fi
         fi
-        local prof slug pinfo pm pt
+        local prof ptype slug pinfo pm pt
         while IFS= read -r prof; do
           [ -n "$prof" ] || continue
+          ptype="$(cfl_profile_type "$prof")"
           # shellcheck disable=SC2016  # $p is a jq variable, not a bash expansion
           slug="$(cfl_cfg --arg p "$prof" '.profiles[$p].preset_slug')"
           if pinfo="$(cfl_or_get "$key" "presets/$slug" 2>/dev/null)"; then
             pm="$(printf '%s' "$pinfo" | jq -r '.data.designated_version.config.model // empty')"
-            pt="$(printf '%s' "$pinfo" | jq -r '[.data.designated_version.config.tools[]?.type] | index("openrouter:fusion") // empty')"
-            if [ "$pm" = "openrouter/fusion" ] && [ -n "$pt" ]; then
-              _d_ok "preset '$slug' configured (profile '$prof', custom panel)"
-              cfl_preset_ready "$slug" || _d_warn "PRESET_READY marker missing or stale for '$slug'" "run ./setup.sh to write it"
-              local live_panel live_judge live_tc cfg_panel cfg_judge
-              live_panel="$(printf '%s' "$pinfo" | jq -r '[.data.designated_version.config.tools[]? | select(.type=="openrouter:fusion").parameters.analysis_models[]?] | join(", ")')"
-              live_judge="$(printf '%s' "$pinfo" | jq -r '[.data.designated_version.config.tools[]? | select(.type=="openrouter:fusion").parameters.model][0] // "?"')"
-              live_tc="$(printf '%s' "$pinfo" | jq -r '.data.designated_version.config.tool_choice // "?"')"
-              _d_det "panel: $live_panel"
-              _d_det "judge: $live_judge"
-              _d_det "tool_choice: $live_tc"
-              # shellcheck disable=SC2016  # $p is a jq variable, not a bash expansion
-              cfg_panel="$(cfl_cfg --arg p "$prof" '.profiles[$p].panel_models | join(", ")')"
-              # shellcheck disable=SC2016  # $p is a jq variable, not a bash expansion
-              cfg_judge="$(cfl_cfg --arg p "$prof" '.profiles[$p].judge_model')"
-              if [ "$live_panel" = "$cfg_panel" ] && [ "$live_judge" = "$cfg_judge" ]; then
-                _d_ok "preset '$slug' matches config (panel + judge in sync)"
+            if [ "$ptype" = "fusion" ]; then
+              pt="$(printf '%s' "$pinfo" | jq -r '[.data.designated_version.config.tools[]?.type] | index("openrouter:fusion") // empty')"
+              if [ "$pm" = "openrouter/fusion" ] && [ -n "$pt" ]; then
+                _d_ok "preset '$slug' configured (profile '$prof', custom panel)"
+                cfl_preset_ready "$slug" || _d_warn "PRESET_READY marker missing or stale for '$slug'" "run ./setup.sh to write it"
+                local live_panel live_judge live_tc cfg_panel cfg_judge
+                live_panel="$(printf '%s' "$pinfo" | jq -r '[.data.designated_version.config.tools[]? | select(.type=="openrouter:fusion").parameters.analysis_models[]?] | join(", ")')"
+                live_judge="$(printf '%s' "$pinfo" | jq -r '[.data.designated_version.config.tools[]? | select(.type=="openrouter:fusion").parameters.model][0] // "?"')"
+                live_tc="$(printf '%s' "$pinfo" | jq -r '.data.designated_version.config.tool_choice // "?"')"
+                _d_det "panel: $live_panel"
+                _d_det "judge: $live_judge"
+                _d_det "tool_choice: $live_tc"
+                # shellcheck disable=SC2016  # $p is a jq variable, not a bash expansion
+                cfg_panel="$(cfl_cfg --arg p "$prof" '.profiles[$p].panel_models | join(", ")')"
+                # shellcheck disable=SC2016  # $p is a jq variable, not a bash expansion
+                cfg_judge="$(cfl_cfg --arg p "$prof" '.profiles[$p].judge_model')"
+                if [ "$live_panel" = "$cfg_panel" ] && [ "$live_judge" = "$cfg_judge" ]; then
+                  _d_ok "preset '$slug' matches config (panel + judge in sync)"
+                else
+                  _d_warn "preset '$slug' differs from config — re-run ./setup.sh to sync"
+                  if [ "$live_panel" != "$cfg_panel" ]; then
+                    _d_det "panel (config): $cfg_panel"
+                    _d_det "panel (live):   $live_panel"
+                  fi
+                  if [ "$live_judge" != "$cfg_judge" ]; then
+                    _d_det "judge (config): $cfg_judge"
+                    _d_det "judge (live):   $live_judge"
+                  fi
+                fi
               else
-                _d_warn "preset '$slug' differs from config — re-run ./setup.sh to sync"
-                if [ "$live_panel" != "$cfg_panel" ]; then
-                  _d_det "panel (config): $cfg_panel"
-                  _d_det "panel (live):   $live_panel"
-                fi
-                if [ "$live_judge" != "$cfg_judge" ]; then
-                  _d_det "judge (config): $cfg_judge"
-                  _d_det "judge (live):   $live_judge"
-                fi
+                _d_no "preset '$slug' exists but misconfigured (model=$pm)" "re-run ./setup.sh"
               fi
             else
-              _d_no "preset '$slug' exists but misconfigured (model=$pm)" "re-run ./setup.sh"
+              # type "preset": a provider-pinned/parameterized single model.
+              local cfg_model live_prov cfg_prov
+              # shellcheck disable=SC2016  # $p is a jq variable, not a bash expansion
+              cfg_model="$(cfl_cfg --arg p "$prof" '.profiles[$p].model')"
+              if [ "$pm" = "$cfg_model" ]; then
+                _d_ok "preset '$slug' configured (profile '$prof', model $pm)"
+                cfl_preset_ready "$slug" || _d_warn "PRESET_READY marker missing or stale for '$slug'" "run ./setup.sh to write it"
+                live_prov="$(printf '%s' "$pinfo" | jq -c '.data.designated_version.config.provider // {}')"
+                # shellcheck disable=SC2016  # $p is a jq variable, not a bash expansion
+                cfg_prov="$(jq -c --arg p "$prof" '.profiles[$p].provider // {}' "$CFL_CONFIG")"
+                _d_det "model: $pm"
+                _d_det "provider: $live_prov"
+                if [ "$live_prov" = "$cfg_prov" ]; then
+                  _d_ok "preset '$slug' matches config (model + provider in sync)"
+                else
+                  _d_warn "preset '$slug' differs from config — re-run ./setup.sh to sync"
+                  _d_det "provider (config): $cfg_prov"
+                  _d_det "provider (live):   $live_prov"
+                fi
+              else
+                _d_no "preset '$slug' exists but model mismatch (model=$pm, expected $cfg_model)" "re-run ./setup.sh"
+              fi
             fi
           else
             _d_warn "preset '$slug' (profile '$prof') not found for this key" "run ./setup.sh (launcher uses the profile's fallback until then)"
           fi
-        done < <(cfl_fusion_profiles)
+        done < <(cfl_preset_backed_profiles)
       else
         _d_no "OpenRouter rejected the key (GET /api/v1/key failed)" "check the key is valid and not expired"
       fi

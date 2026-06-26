@@ -100,22 +100,26 @@ cp config/modes.json.example config/modes.json
 
 A **profile** decides *what* backend powers Claude Code. A **mode** decides *where* that backend is used (see Modes). Pick both: `--profile NAME --mode NAME`. With no `--mode`, the default is `extreme` (the backend in every slot).
 
-Three flavors:
+Four flavors:
 
 | Flavor | Config | Needs `./setup.sh`? |
 |--------|--------|:---:|
 | **Fusion preset** — a panel + judge | `"type": "fusion"` (with `preset_slug`, `panel_models`, `judge_model`, `fallback`) | yes |
 | **Model alias** — a named OpenRouter slug | `"type": "model"` (with `model`) | no |
+| **Provider-pinned preset** — one model forced to one provider | `"type": "preset"` (with `preset_slug`, `model`, `provider`, `fallback`) | yes |
 | **Direct slug** — a raw slug, no profile | `--backend "vendor/model"` | no |
 
 ```bash
 claude-fusion --profile fusion --mode main          # fusion as main + subagents
 claude-fusion --profile deepseek                     # deepseek in every slot (extreme default)
+claude-fusion --profile glm-fireworks                # GLM 5.2 pinned to the Fireworks provider
 claude-fusion --backend "qwen/qwen3-coder-plus"      # raw slug, every slot
 claude-fusion profiles                               # list profiles and their targets
 ```
 
 `--profile` and `--backend` are mutually exclusive. Define profiles in `config/modes.json` (copy `config/modes.json.example`); `default_profile` and `default_mode` set the no-flag behavior.
+
+**Routing variants & provider pinning.** A `model`-type slug can carry an OpenRouter routing variant — `:nitro` (fastest), `:floor` (cheapest), `:exacto` (quality-first provider) — but a slug *cannot* pin one named provider. To force a single provider (e.g. Fireworks) use a `preset` profile: it bakes `provider: { "only": ["fireworks"] }` into a server-side preset (created by `./setup.sh`) and resolves to `@preset/<slug>`. Before setup runs it falls back to the bare `model` (unpinned).
 
 > **Upgrading from v0.2.x:** preset readiness moved to per-slug markers. Re-run `./setup.sh` once after upgrading; until then fusion profiles use their `fallback` (with a warning).
 

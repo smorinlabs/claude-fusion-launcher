@@ -81,6 +81,15 @@ def_model="$(jq -r '.model' "$def_out")"
 if [ "$def_model" = "@preset/cc-fusion" ]; then ok "default slot resolves backend"; else bad "default slot resolves backend" "got $def_model"; fi
 rm -f "$defcfg"
 
+# 6d. a type:"preset" profile resolves to its fallback (bare model) with no marker,
+#     and to @preset/<slug> once the per-slug marker exists.
+fw_ref="$(cfl_profile_backend_ref glm-fireworks)"
+if [ "$fw_ref" = "z-ai/glm-5.2" ]; then ok "preset->fallback (no preset)"; else bad "preset->fallback (no preset)" "got $fw_ref"; fi
+printf '{"preset_slug":"cc-glm-fireworks"}' > "$XDG_CONFIG_HOME/claude-fusion/presets/cc-glm-fireworks.json"
+fw_ref2="$(cfl_profile_backend_ref glm-fireworks)"
+if [ "$fw_ref2" = "@preset/cc-glm-fireworks" ]; then ok "preset->@preset (marker present)"; else bad "preset->@preset (marker present)" "got $fw_ref2"; fi
+rm -f "$XDG_CONFIG_HOME/claude-fusion/presets/cc-glm-fireworks.json"
+
 # 7. subagent mode keeps a plain Opus main but fusion subagent
 sub_out="$(cfl_render_settings subagent fusion)"
 sub="$(jq -r '.env.CLAUDE_CODE_SUBAGENT_MODEL' "$sub_out")"
@@ -139,9 +148,13 @@ rm -f "$lns"
 modes_out="$(bin/claude-fusion modes 2>/dev/null || true)"
 case "$modes_out" in *"subagent:"*) ok "modes subcommand" ;; *) bad "modes subcommand" ;; esac
 
-# 13b. 'profiles' subcommand lists profiles + targets
+# 13b. 'profiles' subcommand lists profiles + targets (fusion, model, and preset)
 profiles_out="$(bin/claude-fusion profiles 2>/dev/null || true)"
-case "$profiles_out" in *"fusion (fusion):"*) ok "profiles subcommand" ;; *) bad "profiles subcommand" "$profiles_out" ;; esac
+if [[ "$profiles_out" == *"fusion (fusion):"* && "$profiles_out" == *"glm-fireworks (preset):"* && "$profiles_out" == *"fireworks"* ]]; then
+  ok "profiles subcommand"
+else
+  bad "profiles subcommand" "$profiles_out"
+fi
 
 # 14. --show-settings renders valid JSON and reports the active profile
 ss_out="$(bin/claude-fusion --show-settings --profile fusion --mode main 2>/dev/null || true)"
@@ -330,18 +343,23 @@ else
 fi
 
 # 22b. Setup creates a preset per fusion profile and writes a per-slug marker each.
+# The stub echoes back the requested model so it works for fusion AND preset bodies.
 okbin="$tmpstate/setup-okbin"; mkdir -p "$okbin"
 cat > "$okbin/curl" <<'EOS'
 #!/usr/bin/env bash
-url=""
+url=""; body=""; prev=""
 for arg in "$@"; do
   case "$arg" in https://*) url="$arg" ;; esac
+  [ "$prev" = "-d" ] && body="$arg"
+  prev="$arg"
 done
 case "$url" in
   */key) printf '{"data":{"label":"smoke"}}' ;;
   */credits) printf '{"data":{"total_credits":10,"total_usage":1}}' ;;
   */presets/*/chat/completions)
-    printf '{"data":{"designated_version":{"config":{"model":"openrouter/fusion","tools":[{"type":"openrouter:fusion"}]}}}}' ;;
+    m="$(printf '%s' "$body" | jq -r '.model // "openrouter/fusion"')"
+    prov="$(printf '%s' "$body" | jq -c '.provider // {}')"
+    printf '{"data":{"designated_version":{"config":{"model":"%s","provider":%s,"tools":[{"type":"openrouter:fusion"}]}}}}' "$m" "$prov" ;;
   *) printf '{"error":{"message":"unexpected URL"}}' ;;
 esac
 EOS
@@ -365,6 +383,41 @@ else
   bad "setup --profile model skips" "rc=$skip_rc $skip_out"
 fi
 rm -f "$two_cfg"
+
+# 22d. setup --profile <preset-profile> creates a provider-pinned preset: writes the
+#      marker AND the POSTed body carries the provider pin (provider.only).
+presetbin="$tmpstate/setup-presetbin"; mkdir -p "$presetbin"
+preset_body_log="$tmpstate/preset-body.txt"
+cat > "$presetbin/curl" <<'EOS'
+#!/usr/bin/env bash
+url=""; body=""; prev=""
+for arg in "$@"; do
+  case "$arg" in https://*) url="$arg" ;; esac
+  [ "$prev" = "-d" ] && body="$arg"
+  prev="$arg"
+done
+case "$url" in
+  */key) printf '{"data":{"label":"smoke"}}' ;;
+  */credits) printf '{"data":{"total_credits":10,"total_usage":1}}' ;;
+  */presets/*/chat/completions)
+    printf '%s\n' "$body" >> "$PRESET_BODY_LOG"
+    m="$(printf '%s' "$body" | jq -r '.model // "openrouter/fusion"')"
+    printf '{"data":{"designated_version":{"config":{"model":"%s"}}}}' "$m" ;;
+  *) printf '{"error":{"message":"unexpected URL"}}' ;;
+esac
+EOS
+chmod +x "$presetbin/curl"
+preset_state="$tmpstate/setup-preset-state"
+PATH="$presetbin:$PATH" PRESET_BODY_LOG="$preset_body_log" XDG_CONFIG_HOME="$preset_state" \
+  ./setup.sh --profile glm-fireworks --key test >/dev/null 2>&1
+preset_rc=$?
+if [ "$preset_rc" -eq 0 ] \
+  && [ -f "$preset_state/claude-fusion/presets/cc-glm-fireworks.json" ] \
+  && jq -rc 'select(.model=="z-ai/glm-5.2") | .provider.only' "$preset_body_log" 2>/dev/null | grep -q fireworks; then
+  ok "setup creates provider-pinned preset"
+else
+  bad "setup creates provider-pinned preset" "rc=$preset_rc"
+fi
 
 # 23. gitleaks hook falls back to the older protect --staged syntax.
 gitleaksbin="$tmpstate/gitleaksbin"; mkdir -p "$gitleaksbin"
@@ -438,6 +491,43 @@ else
   bad "just install defaults to HOME"
 fi
 rm -rf "$CFL_ROOT/~"
+
+# 26. Doctor covers type:"preset" profiles (provider-pinned) — in-sync + drift, non-fatal.
+glm_synced="$(jq -nc '{data:{designated_version:{config:{model:"z-ai/glm-5.2",provider:{only:["fireworks"]}}}}}')"
+glm_drift="$(jq -nc '{data:{designated_version:{config:{model:"z-ai/glm-5.2",provider:{only:["together"]}}}}}')"
+dp_ok_out="$(
+  PATH="$fakebin:$PATH"
+  cfl_or_get() {
+    case "$2" in
+      key) printf '{"data":{"label":"smoke"}}' ;;
+      credits) printf '{"data":{"total_credits":10,"total_usage":1}}' ;;
+      presets/cc-glm-fireworks) printf '%s' "$glm_synced" ;;
+      *) return 22 ;;
+    esac
+  }
+  cfl_doctor "test" "flag"
+)"
+dp_drift_rc=0
+dp_drift_out="$(
+  PATH="$fakebin:$PATH"
+  cfl_or_get() {
+    case "$2" in
+      key) printf '{"data":{"label":"smoke"}}' ;;
+      credits) printf '{"data":{"total_credits":10,"total_usage":1}}' ;;
+      presets/cc-glm-fireworks) printf '%s' "$glm_drift" ;;
+      *) return 22 ;;
+    esac
+  }
+  cfl_doctor "test" "flag"
+)" || dp_drift_rc=$?
+if [[ "$dp_ok_out" == *"preset 'cc-glm-fireworks' configured (profile 'glm-fireworks', model z-ai/glm-5.2)"* \
+  && "$dp_ok_out" == *"model + provider in sync"* \
+  && "$dp_drift_out" == *"differs from config"* && "$dp_drift_out" == *'"only":["together"]'* \
+  && "$dp_drift_rc" -eq 0 ]]; then
+  ok "doctor covers preset profiles"
+else
+  bad "doctor covers preset profiles" "drift_rc=$dp_drift_rc"
+fi
 
 echo "----"
 [ "$fail" -eq 0 ] && echo "smoke: ALL PASS" || echo "smoke: FAILURES above"

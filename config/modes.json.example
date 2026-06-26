@@ -20,7 +20,8 @@
     "qwen": { "type": "model", "model": "qwen/qwen3-coder-plus" },
     "glm": { "type": "model", "model": "z-ai/glm-5.2" },
     "glm-nitro": { "type": "model", "model": "z-ai/glm-5.2:nitro" },
-    "glm-exacto": { "type": "model", "model": "z-ai/glm-5.2:exacto" }
+    "glm-exacto": { "type": "model", "model": "z-ai/glm-5.2:exacto" },
+    "glm-fireworks": { "type": "preset", "preset_slug": "cc-glm-fireworks", "model": "z-ai/glm-5.2", "provider": { "only": ["fireworks"] }, "fallback": "z-ai/glm-5.2" }
   },
   "modes": {
     "subagent": { "default": "opus", "opus": "~anthropic/claude-opus-latest", "sonnet": "~anthropic/claude-sonnet-latest", "haiku": "~anthropic/claude-haiku-latest", "subagent": "backend" },
