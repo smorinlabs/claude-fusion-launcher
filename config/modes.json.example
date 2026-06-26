@@ -1,6 +1,7 @@
 {
   "default_profile": "fusion",
   "default_mode": "extreme",
+  "_comment_routing": "Model-alias slugs can carry an OpenRouter routing variant: no suffix = Balanced (price + speed); ':nitro' = fastest (sort=throughput); ':floor' = cheapest (sort=price); ':exacto' = quality-first provider (best tool-calling signals). Pinning ONE fixed provider (e.g. Fireworks) is NOT a slug suffix — it needs a server-side preset with provider.only (planned).",
   "profiles": {
     "fusion": {
       "type": "fusion",
@@ -18,7 +19,8 @@
     "deepseek": { "type": "model", "model": "deepseek/deepseek-v3.2" },
     "qwen": { "type": "model", "model": "qwen/qwen3-coder-plus" },
     "glm": { "type": "model", "model": "z-ai/glm-5.2" },
-    "glm-nitro": { "type": "model", "model": "z-ai/glm-5.2:nitro" }
+    "glm-nitro": { "type": "model", "model": "z-ai/glm-5.2:nitro" },
+    "glm-exacto": { "type": "model", "model": "z-ai/glm-5.2:exacto" }
   },
   "modes": {
     "subagent": { "default": "opus", "opus": "~anthropic/claude-opus-latest", "sonnet": "~anthropic/claude-sonnet-latest", "haiku": "~anthropic/claude-haiku-latest", "subagent": "backend" },
