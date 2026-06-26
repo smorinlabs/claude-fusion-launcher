@@ -17,7 +17,8 @@
     },
     "deepseek": { "type": "model", "model": "deepseek/deepseek-v3.2" },
     "qwen": { "type": "model", "model": "qwen/qwen3-coder-plus" },
-    "glm": { "type": "model", "model": "z-ai/glm-5.2" }
+    "glm": { "type": "model", "model": "z-ai/glm-5.2" },
+    "glm-nitro": { "type": "model", "model": "z-ai/glm-5.2:nitro" }
   },
   "modes": {
     "subagent": { "default": "opus", "opus": "~anthropic/claude-opus-latest", "sonnet": "~anthropic/claude-sonnet-latest", "haiku": "~anthropic/claude-haiku-latest", "subagent": "backend" },
