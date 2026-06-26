@@ -59,3 +59,34 @@ actually resolved.
 ### Manual Verification
 - `bin/claude-fusion doctor --key-file ~/.config/smorin/.env` shows panel/judge/tool_choice,
   a "matches config" line, and the key last-4.
+
+---
+
+## [ ] Project P03: profiles + multi-model backends (v0.3.0)
+**Goal/Requirement**: Add named **profiles** so the launcher can target any OpenRouter
+backend — a fusion preset, a model-slug alias, or a raw `--backend` slug — composed with
+the existing modes. Clean-break config schema; default mode becomes `extreme`.
+
+**Out of Scope**
+- Back-compat shim for the old top-level preset keys, or a `"fusion"` slot-keyword alias.
+- Per-profile `default_mode`.
+
+### Tests & Tasks
+- [ ] [P03-T01] Config schema (`profiles` catalog, `default_profile`/`default_mode`) + `lib/common.sh` resolvers (`cfl_resolve_profile/_mode`, `cfl_profile_type`, `cfl_backend_ref`, per-slug `cfl_preset_ready`, `cfl_render_settings` with `"backend"` keyword)
+- [ ] [P03-T02] `setup.sh`: per-fusion-profile preset creation (all by default, `--profile` for one), per-slug markers, model-profile skip
+- [ ] [P03-T03] `bin/claude-fusion`: `--profile`/`--backend`, `profiles` subcommand, `extreme` default, mutual exclusion, profile-aware preset warning, richer `--show-settings`; `just run` default → extreme
+- [ ] [P03-T04] `cfl_doctor`: per-fusion-profile preset + drift, profiles summary
+- [ ] [P03-T05] README Profiles section + upgrade note; PROJECTS.md
+- [ ] [P03-TS01] `tests/smoke.sh`: profile/backend resolution (all 3 flavors), mode×profile render, default precedence, `--profile`/`--backend` mutual exclusion, multi-profile setup + markers, profile-aware doctor
+- [ ] [P03-TS02] Live verification: `--profile deepseek -p "..." --output-format json` shows the deepseek slug; `./setup.sh` creates all fusion presets
+
+### Automated Verification
+- `make check`, then `just all` (shellcheck + smoke) pass.
+
+### Manual Verification
+- `bin/claude-fusion profiles` lists `fusion` (fusion), `deepseek`/`qwen` (model).
+- `bin/claude-fusion --profile fusion --mode main --show-settings` → opus + subagent = `@preset/cc-fusion`.
+- `bin/claude-fusion --profile deepseek --show-settings` → all slots = `deepseek/deepseek-v3.2`.
+- `bin/claude-fusion --backend "qwen/qwen3-coder-plus" --show-settings` → all slots = `qwen/qwen3-coder-plus`.
+- `bin/claude-fusion --profile deepseek --backend foo` → error.
+- `./setup.sh --key-file ~/.config/smorin/.env` writes markers under `$CFL_STATE_DIR/presets/`.

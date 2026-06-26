@@ -1,12 +1,12 @@
 # claude-fusion-launcher
 
-**Run Claude Code on a panel of models instead of one.**
+**Run Claude Code on any OpenRouter backend — a fusion panel, a model alias, or a raw slug.**
 
-This launcher points Claude Code at [OpenRouter Fusion](https://openrouter.ai/docs/guides/routing/routers/fusion-router): several frontier models answer in parallel and a judge model merges them into one stronger answer. Same Claude Code you already use — better answers on hard problems.
+This launcher points Claude Code at [OpenRouter](https://openrouter.ai) via **profiles**: use [OpenRouter Fusion](https://openrouter.ai/docs/guides/routing/routers/fusion-router) (several frontier models answering in parallel, merged by a judge), a named model alias, or any raw model slug. Same Claude Code you already use — sharper answers by routing through the backend that fits the job.
 
-- **Drop-in.** One command launches Claude Code with fusion wired in. No code changes.
-- **Dial the power.** Fusion as your main model, as subagents only (a cheaper "second opinion"), or everywhere.
-- **Yours to configure.** Your OpenRouter key, your panel of models, your modes.
+- **Drop-in.** One command launches Claude Code with your chosen backend wired in. No code changes.
+- **Dial the power.** Any backend as your main model, as subagents only (a cheaper "second opinion"), or everywhere (`extreme` default).
+- **Yours to configure.** Your OpenRouter key, your profiles, your modes.
 - **Interactive or headless.** Works in normal sessions and in `claude -p` one-shots.
 
 ---
@@ -28,7 +28,7 @@ bin/claude-fusion -g                                # "just go" — default mode
 bin/claude-fusion -p "design a rate limiter"        # headless one-shot
 ```
 
-That's it. The default mode runs fusion as your main model and in subagents.
+That's it. The default mode (`extreme`) runs the active profile's backend in every tier — main, Sonnet, Haiku, and subagents.
 
 **Helpful extras:**
 - `make install` — put `claude-fusion` on your PATH (then drop the `bin/`).
@@ -51,13 +51,13 @@ The environment is defined in `.flox/env/manifest.toml` — edit it and re-`flox
 
 ## Modes
 
-A **mode** decides where fusion is used. Pick one with `--mode`; the default is `main`.
+A **mode** decides where the active profile's backend is used. Pick one with `--mode`; the default is `extreme`.
 
 | Mode | Main model | Subagents | Best for | Relative cost |
 |------|-----------|-----------|----------|:---:|
-| `main` *(default)* | **fusion** | **fusion** | you want fusion — this is the one | $$ |
-| `subagent` | Opus | **fusion** | cheaper day-to-day; fusion only when Claude spawns a subagent | $ |
-| `extreme` | **fusion** | **fusion** | every tier (Opus/Sonnet/Haiku) + subagents on fusion | $$$ |
+| `main` | **backend** | **backend** | backend as main + subagents only | $$ |
+| `subagent` | Opus | **backend** | cheaper day-to-day; backend only when Claude spawns a subagent | $ |
+| `extreme` *(default)* | **backend** | **backend** | every tier (Opus/Sonnet/Haiku) + subagents on backend | $$$ |
 
 ```bash
 bin/claude-fusion --mode subagent -p "explain this stack trace"
@@ -72,10 +72,10 @@ Defaults ship in `config/modes.json.example` and work out of the box — **nothi
 cp config/modes.json.example config/modes.json
 ```
 
-- **Add your own mode.** Each slot is a model slug, or the keyword `"fusion"` (which resolves to your preset):
+- **Add your own mode.** Each slot is a model slug, or the keyword `"backend"` (which resolves to the active profile's backend):
   ```jsonc
   "modes": {
-    "myteam": { "default": "opus", "opus": "fusion", "sonnet": "deepseek/deepseek-v3.2", "haiku": "~anthropic/claude-haiku-latest", "subagent": "fusion" }
+    "myteam": { "default": "opus", "opus": "backend", "sonnet": "deepseek/deepseek-v3.2", "haiku": "~anthropic/claude-haiku-latest", "subagent": "backend" }
   }
   ```
   ```bash
@@ -86,6 +86,31 @@ cp config/modes.json.example config/modes.json
   "panel_models": ["~anthropic/claude-opus-latest","~openai/gpt-latest","~google/gemini-pro-latest","deepseek/deepseek-v3.2","qwen/qwen3-coder-plus"],
   "judge_model": "~anthropic/claude-opus-latest"
   ```
+
+---
+
+## Profiles
+
+A **profile** decides *what* backend powers Claude Code. A **mode** decides *where* that backend is used (see Modes). Pick both: `--profile NAME --mode NAME`. With no `--mode`, the default is `extreme` (the backend in every slot).
+
+Three flavors:
+
+| Flavor | Config | Needs `./setup.sh`? |
+|--------|--------|:---:|
+| **Fusion preset** — a panel + judge | `"type": "fusion"` (with `preset_slug`, `panel_models`, `judge_model`, `fallback`) | yes |
+| **Model alias** — a named OpenRouter slug | `"type": "model"` (with `model`) | no |
+| **Direct slug** — a raw slug, no profile | `--backend "vendor/model"` | no |
+
+```bash
+claude-fusion --profile fusion --mode main          # fusion as main + subagents
+claude-fusion --profile deepseek                     # deepseek in every slot (extreme default)
+claude-fusion --backend "qwen/qwen3-coder-plus"      # raw slug, every slot
+claude-fusion profiles                               # list profiles and their targets
+```
+
+`--profile` and `--backend` are mutually exclusive. Define profiles in `config/modes.json` (copy `config/modes.json.example`); `default_profile` and `default_mode` set the no-flag behavior.
+
+> **Upgrading from v0.2.x:** preset readiness moved to per-slug markers. Re-run `./setup.sh` once after upgrading; until then fusion profiles use their `fallback` (with a warning).
 
 ---
 
@@ -106,13 +131,16 @@ Your key is injected only as `ANTHROPIC_AUTH_TOKEN` into the `claude` process (i
 ## Commands
 
 ```bash
-claude-fusion -g                     # launch the default mode (no other args needed)
-claude-fusion --mode MODE [args…]    # launch a mode; extra args pass through to claude (e.g. -p "…")
-claude-fusion modes                  # list modes and their per-slot models
-claude-fusion doctor                 # health check: deps, key, credits, preset, env conflicts
-claude-fusion --show-settings        # print the resolved settings JSON, no launch (alias: --dry-run)
-claude-fusion --cost --mode … -p …   # run, then report what that session cost on OpenRouter
-claude-fusion --help                 # usage
+claude-fusion -g                              # launch the default mode (no other args needed)
+claude-fusion --profile NAME [args…]          # use a named profile (fusion preset or model alias)
+claude-fusion --backend "vendor/model" [args…]  # use a raw OpenRouter slug directly
+claude-fusion --mode MODE [args…]             # launch a mode; extra args pass through to claude (e.g. -p "…")
+claude-fusion modes                           # list modes and their per-slot models
+claude-fusion profiles                        # list profiles and their targets
+claude-fusion doctor                          # health check: deps, key, credits, preset, env conflicts
+claude-fusion --show-settings                 # print the resolved settings JSON, no launch (alias: --dry-run)
+claude-fusion --cost --mode … -p …            # run, then report what that session cost on OpenRouter
+claude-fusion --help                          # usage
 ```
 
 Repo tasks (run as `make <t>` or `just <t>`): `check` (verify deps) · `lint` (shellcheck) · `test` (no-cost smoke tests) · `setup` · `install` (symlink onto PATH; `PREFIX` overridable) · `hooks` (enable the gitleaks pre-commit hook). `just all` runs lint + tests.
