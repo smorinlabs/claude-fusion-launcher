@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# claude-fusion — run Claude Code through OpenRouter on a configurable profile + mode.
+# claude-openrouter — run Claude Code through OpenRouter on a configurable profile + mode.
 # The API key is deliberately scoped to subshells so it never leaks into your shell;
 # silence shellcheck's subshell-modification notes for that intentional pattern.
 # shellcheck disable=SC2030,SC2031
@@ -12,25 +12,25 @@ while [ -L "$_src" ]; do
   _src="$(readlink "$_src")"
   case "$_src" in /*) ;; *) _src="$_dir/$_src" ;; esac
 done
-CFL_ROOT="$(cd -P "$(dirname "$_src")/.." && pwd)"
+COL_ROOT="$(cd -P "$(dirname "$_src")/.." && pwd)"
 # shellcheck source=lib/common.sh
-. "$CFL_ROOT/lib/common.sh"
+. "$COL_ROOT/lib/common.sh"
 
 # Default = the configured default_mode (extreme): the active backend in every slot.
 DEFAULT_MODE="extreme"
 
 usage() {
   cat <<EOF
-claude-fusion — run Claude Code through OpenRouter, on a profile + mode.
+claude-openrouter — run Claude Code through OpenRouter, on a profile + mode.
 
 Quick start:
-  claude-fusion -g                       launch defaults (profile + mode: $DEFAULT_MODE)
-  claude-fusion --profile NAME [args…]   pick a backend profile; extra args go to claude
-  claude-fusion --backend SLUG [args…]   use a raw OpenRouter slug (no named profile)
-  claude-fusion --mode MODE [args…]      pick where the backend goes (see 'modes')
-  claude-fusion profiles                 list profiles
-  claude-fusion modes                    list modes
-  claude-fusion doctor                   health checks (deps, key, credits, presets)
+  claude-openrouter -g                       launch defaults (profile + mode: $DEFAULT_MODE)
+  claude-openrouter --profile NAME [args…]   pick a backend profile; extra args go to claude
+  claude-openrouter --backend SLUG [args…]   use a raw OpenRouter slug (no named profile)
+  claude-openrouter --mode MODE [args…]      pick where the backend goes (see 'modes')
+  claude-openrouter profiles                 list profiles
+  claude-openrouter modes                    list modes
+  claude-openrouter doctor                   health checks (deps, key, credits, presets)
 
 Options:
   -g, --go                 launch the defaults, no extra args needed
@@ -59,36 +59,36 @@ case "${1:-}" in
         *) shift;;
       esac
     done
-    cfl_require jq
-    cfl_load_config
+    col_require jq
+    col_load_config
     # Resolve leniently: doctor must complete its report even if the key source is
     # bad (a diagnostic tool shouldn't abort on a missing --key-file).
     d_resolved="" d_source=""
     if [ -n "$d_key" ]; then
       d_resolved="$d_key" d_source="flag"
     elif [ -n "$d_keyfile" ]; then
-      # cfl_resolve_key exit()s on a bad file; put `|| true` at statement level
+      # col_resolve_key exit()s on a bad file; put `|| true` at statement level
       # (an `|| true` *inside* the $() can't catch an exit, and the failing
       # substitution would then trip set -e).
-      d_resolved="$(cfl_resolve_key "" "$d_keyfile" 2>/dev/null)" || true
+      d_resolved="$(col_resolve_key "" "$d_keyfile" 2>/dev/null)" || true
       d_source="file:$d_keyfile"
-      [ -n "$d_resolved" ] || cfl_warn "doctor: couldn't read a key from '$d_keyfile' — continuing without account checks"
+      [ -n "$d_resolved" ] || col_warn "doctor: couldn't read a key from '$d_keyfile' — continuing without account checks"
     elif [ -n "${OPENROUTER_API_KEY:-}" ]; then
       d_resolved="$OPENROUTER_API_KEY" d_source="env:OPENROUTER_API_KEY"
     fi
-    cfl_doctor "$d_resolved" "$d_source"
+    col_doctor "$d_resolved" "$d_source"
     exit $?
     ;;
   modes)
-    cfl_require jq
-    cfl_load_config
-    cfl_list_modes
+    col_require jq
+    col_load_config
+    col_list_modes
     exit 0
     ;;
   profiles)
-    cfl_require jq
-    cfl_load_config
-    cfl_list_profiles
+    col_require jq
+    col_load_config
+    col_list_profiles
     exit 0
     ;;
 esac
@@ -128,7 +128,7 @@ while [ $# -gt 0 ]; do
 done
 
 if [ "$profile_set" -eq 1 ] && [ "$backend_set" -eq 1 ]; then
-  cfl_die "--profile and --backend are mutually exclusive (a raw --backend slug has no named profile)"
+  col_die "--profile and --backend are mutually exclusive (a raw --backend slug has no named profile)"
 fi
 
 # No actionable input -> minimal help; on a TTY, offer to just go.
@@ -144,14 +144,14 @@ if [ "$go" -eq 0 ] && [ "$mode_set" -eq 0 ] && [ "$show" -eq 0 ] \
   fi
 fi
 
-cfl_require jq
-cfl_load_config
-mode="$(cfl_resolve_mode "$mode")"
+col_require jq
+col_load_config
+mode="$(col_resolve_mode "$mode")"
 if [ "$backend_set" -eq 0 ]; then
-  profile="$(cfl_resolve_profile "$profile")"
-  [ -n "$profile" ] || cfl_die "no profile given and no .default_profile in config — use --profile NAME, --backend SLUG, or set default_profile in $CFL_CONFIG"
+  profile="$(col_resolve_profile "$profile")"
+  [ -n "$profile" ] || col_die "no profile given and no .default_profile in config — use --profile NAME, --backend SLUG, or set default_profile in $COL_CONFIG"
 fi
-settings="$(cfl_render_settings "$mode" "$profile" "$backend")"
+settings="$(col_render_settings "$mode" "$profile" "$backend")"
 
 # Dry run: show what would launch, no key needed, no claude needed.
 if [ "$show" -eq 1 ]; then
@@ -159,51 +159,51 @@ if [ "$show" -eq 1 ]; then
   if [ "$backend_set" -eq 1 ]; then
     echo "profile:    (none — direct --backend)"
   else
-    echo "profile:    $profile ($(cfl_profile_type "$profile"))"
+    echo "profile:    $profile ($(col_profile_type "$profile"))"
   fi
-  echo "config:     $CFL_CONFIG"
-  echo "backend:    $(cfl_backend_ref "$profile" "$backend")"
+  echo "config:     $COL_CONFIG"
+  echo "backend:    $(col_backend_ref "$profile" "$backend")"
   echo "settings:   $settings"
   echo "----"
   jq . "$settings"
   exit 0
 fi
 
-cfl_require claude curl
-key="$(cfl_resolve_key "$key" "$keyfile")"
-ptype="$(cfl_profile_type "$profile")"
+col_require claude curl
+key="$(col_resolve_key "$key" "$keyfile")"
+ptype="$(col_profile_type "$profile")"
 if [ "$backend_set" -eq 0 ] && { [ "$ptype" = "fusion" ] || [ "$ptype" = "preset" ]; }; then
   # shellcheck disable=SC2016  # $p is a jq variable, not a bash expansion
-  pslug="$(cfl_cfg --arg p "$profile" '.profiles[$p].preset_slug // empty')"
-  cfl_preset_ready "$pslug" || cfl_warn "preset not set up for profile '$profile' (slug '$pslug') — using fallback '$(cfl_backend_ref "$profile" "")'. Run ./setup.sh --profile $profile."
+  pslug="$(col_cfg --arg p "$profile" '.profiles[$p].preset_slug // empty')"
+  col_preset_ready "$pslug" || col_warn "preset not set up for profile '$profile' (slug '$pslug') — using fallback '$(col_backend_ref "$profile" "")'. Run ./setup.sh --profile $profile."
 fi
 
 # Pre-flight: warn early (with a doctor hint) if OpenRouter is unreachable or the
 # key is rejected — otherwise the user only finds out via cryptic mid-session errors.
 # (A SessionStart hook executes but Claude Code currently discards its output
 # (bug #10373), so it can't show this warning — hence a pre-flight. Skip with
-# CFL_SKIP_PRECHECK=1.)
-if [ -z "${CFL_SKIP_PRECHECK:-}" ] && [ -x "$CFL_ROOT/lib/check-openrouter.sh" ]; then
-  OPENROUTER_API_KEY="$key" "$CFL_ROOT/lib/check-openrouter.sh" || true
+# COL_SKIP_PRECHECK=1.)
+if [ -z "${COL_SKIP_PRECHECK:-}" ] && [ -x "$COL_ROOT/lib/check-openrouter.sh" ]; then
+  OPENROUTER_API_KEY="$key" "$COL_ROOT/lib/check-openrouter.sh" || true
 fi
 
 # Pre-flight: when the resolved backend is a preset (@preset/<slug>), confirm the
 # preset actually exists on the account before launching — otherwise Claude Code
 # would fail mid-session. A missing preset aborts here with a fix hint. Skip with
-# CFL_SKIP_PRECHECK=1.
-if [ -z "${CFL_SKIP_PRECHECK:-}" ] && [ "$backend_set" -eq 0 ]; then
-  fref="$(cfl_backend_ref "$profile" "")"
+# COL_SKIP_PRECHECK=1.
+if [ -z "${COL_SKIP_PRECHECK:-}" ] && [ "$backend_set" -eq 0 ]; then
+  fref="$(col_backend_ref "$profile" "")"
   case "$fref" in
     @preset/*)
       cslug="${fref#@preset/}"
       # `|| _pcrc=$?` keeps the non-zero return from tripping `set -e` while still
       # capturing the specific code (1 = missing, 2 = unreachable).
       _pcrc=0
-      cfl_preset_check "$key" "$cslug" || _pcrc=$?
+      col_preset_check "$key" "$cslug" || _pcrc=$?
       if [ "$_pcrc" -eq 1 ]; then
-        cfl_die "preset '$cslug' (profile '$profile') is not available on your OpenRouter account — run: ./setup.sh --profile $profile  (then retry; or 'claude-fusion doctor' to diagnose, or CFL_SKIP_PRECHECK=1 to bypass)"
+        col_die "preset '$cslug' (profile '$profile') is not available on your OpenRouter account — run: ./setup.sh --profile $profile  (then retry; or 'claude-openrouter doctor' to diagnose, or COL_SKIP_PRECHECK=1 to bypass)"
       elif [ "$_pcrc" -eq 2 ]; then
-        cfl_warn "couldn't verify preset '$cslug' (OpenRouter unreachable) — launching anyway; run 'claude-fusion doctor' if Claude errors"
+        col_warn "couldn't verify preset '$cslug' (OpenRouter unreachable) — launching anyway; run 'claude-openrouter doctor' if Claude errors"
       fi
       ;;
   esac
@@ -211,7 +211,7 @@ fi
 
 # --cost: measure OpenRouter spend across the session (assumes one session at a time).
 if [ "$cost" -eq 1 ]; then
-  before="$(cfl_credits_usage "$key" 2>/dev/null || true)"
+  before="$(col_credits_usage "$key" 2>/dev/null || true)"
   status=0
   ( unset ANTHROPIC_API_KEY; export ANTHROPIC_AUTH_TOKEN="$key"; claude --settings "$settings" ${args[@]+"${args[@]}"} ) || status=$?
   if [ -n "$before" ]; then
@@ -220,21 +220,21 @@ if [ "$cost" -eq 1 ]; then
     # slow/stalled network can't stretch the wait well past max.
     after="$before"; max=30; SECONDS=0
     while [ "$SECONDS" -lt "$max" ]; do
-      after="$(cfl_credits_usage "$key" 2>/dev/null || printf '%s' "$before")"
+      after="$(col_credits_usage "$key" 2>/dev/null || printf '%s' "$before")"
       [ "$after" != "$before" ] && break
       rem=$(( max - SECONDS )); if [ "$rem" -lt 0 ]; then rem=0; fi
-      printf '\rclaude-fusion: waiting for OpenRouter billing to settle… %2ds ' "$rem" >&2
+      printf '\rclaude-openrouter: waiting for OpenRouter billing to settle… %2ds ' "$rem" >&2
       sleep 2
     done
     printf '\r%*s\r' 60 '' >&2   # clear the countdown line
     if [ "$after" != "$before" ]; then
       spent="$(jq -n --argjson a "$after" --argjson b "$before" '(($a - $b) * 10000 | round) / 10000')"
-      printf 'claude-fusion: session cost ~$%s (OpenRouter usage $%s -> $%s)\n' "$spent" "$before" "$after" >&2
+      printf 'claude-openrouter: session cost ~$%s (OpenRouter usage $%s -> $%s)\n' "$spent" "$before" "$after" >&2
     else
-      printf 'claude-fusion: no usage change detected after ~30s — OpenRouter billing can lag; see https://openrouter.ai/activity\n' >&2
+      printf 'claude-openrouter: no usage change detected after ~30s — OpenRouter billing can lag; see https://openrouter.ai/activity\n' >&2
     fi
   else
-    cfl_warn "could not read credit balance for the cost report"
+    col_warn "could not read credit balance for the cost report"
   fi
   exit "$status"
 fi

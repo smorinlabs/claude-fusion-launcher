@@ -23,7 +23,7 @@
       }
     },
     "hook": {
-      "on-activate": "  # Put the launcher on PATH (on-activate runs for both interactive and\n  # `flox activate -- cmd`, unlike [profile] which is interactive-only).\n  export PATH=\"$FLOX_ENV_PROJECT/bin:$PATH\"\n  echo \"claude-fusion: env ready — claude, curl, jq, shellcheck, just, gitleaks on PATH.\" >&2\n  echo \"claude-fusion: next → ./setup.sh --key-file <key>   then   claude-fusion -g\" >&2\n"
+      "on-activate": "  # Put the launcher on PATH (on-activate runs for both interactive and\n  # `flox activate -- cmd`, unlike [profile] which is interactive-only).\n  export PATH=\"$FLOX_ENV_PROJECT/bin:$PATH\"\n  echo \"claude-openrouter: env ready — claude, curl, jq, shellcheck, just, gitleaks on PATH.\" >&2\n  echo \"claude-openrouter: next → ./setup.sh --key-file <key>   then   claude-openrouter -g\" >&2\n"
     },
     "profile": {},
     "options": {

@@ -12,7 +12,7 @@ check:
 
 # shellcheck all scripts
 lint:
-    shellcheck bin/claude-fusion setup.sh lib/common.sh lib/check-openrouter.sh tests/smoke.sh .githooks/pre-commit
+    shellcheck bin/claude-openrouter setup.sh lib/common.sh lib/check-openrouter.sh tests/smoke.sh .githooks/pre-commit
 
 # run no-cost smoke tests
 test:
@@ -27,21 +27,21 @@ setup *args:
 
 # run Claude Code with a mode (default: extreme). e.g. `just run main -p "hi"`
 run mode="extreme" *args:
-    mode="$1"; shift; bin/claude-fusion --mode "$mode" "$@"
+    mode="$1"; shift; bin/claude-openrouter --mode "$mode" "$@"
 
 # list available modes
 modes:
-    bin/claude-fusion modes
+    bin/claude-openrouter modes
 
 # health checks (deps, key, credits, preset). pass --key-file as needed.
 doctor *args:
-    bin/claude-fusion doctor "$@"
+    bin/claude-openrouter doctor "$@"
 
 # symlink the launcher onto PATH (prefix defaults to ~/.local/bin)
 install prefix=default_prefix:
     mkdir -p "{{ prefix }}"
-    ln -sf "$(pwd)/bin/claude-fusion" "{{ prefix }}/claude-fusion"
-    @echo "linked {{ prefix }}/claude-fusion"
+    ln -sf "$(pwd)/bin/claude-openrouter" "{{ prefix }}/claude-openrouter"
+    @echo "linked {{ prefix }}/claude-openrouter"
 
 # enable the gitleaks pre-commit hook for this repo
 hooks:

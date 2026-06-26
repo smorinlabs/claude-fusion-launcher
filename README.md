@@ -1,4 +1,4 @@
-# claude-fusion-launcher
+# claude-openrouter-launcher
 
 **Run Claude Code on any OpenRouter backend — a fusion panel, a model alias, or a raw slug.**
 
@@ -17,23 +17,23 @@ You need: **Claude Code** (`claude`), an **[OpenRouter](https://openrouter.ai) A
 
 ```bash
 # 1. Get it
-git clone https://github.com/smorinlabs/claude-fusion-launcher
-cd claude-fusion-launcher
+git clone https://github.com/smorinlabs/claude-openrouter-launcher
+cd claude-openrouter-launcher
 
 # 2. One-time setup — creates your fusion preset on your own OpenRouter account
 ./setup.sh --key-file ~/.config/openrouter.env     # or:  --key sk-or-v1-…   |   export OPENROUTER_API_KEY=…
 
 # 3. Launch Claude Code with fusion
-bin/claude-fusion -g                                # "just go" — default mode, interactive
-bin/claude-fusion -p "design a rate limiter"        # headless one-shot
+bin/claude-openrouter -g                                # "just go" — default mode, interactive
+bin/claude-openrouter -p "design a rate limiter"        # headless one-shot
 ```
 
 That's it. The default mode (`extreme`) runs the active profile's backend in every tier — main, Sonnet, Haiku, and subagents.
 
 **Helpful extras:**
-- `make install` — put `claude-fusion` on your PATH (then drop the `bin/`).
-- `claude-fusion` with no arguments — prints help (and, in a terminal, offers to just go).
-- `claude-fusion doctor` — checks your key, credits, preset, and environment if anything's off.
+- `make install` — put `claude-openrouter` on your PATH (then drop the `bin/`).
+- `claude-openrouter` with no arguments — prints help (and, in a terminal, offers to just go).
+- `claude-openrouter doctor` — checks your key, credits, preset, and environment if anything's off.
 
 ### Or use Flox (reproducible, zero manual installs)
 
@@ -42,7 +42,7 @@ That's it. The default mode (`extreme`) runs the active profile's backend in eve
 ```bash
 flox activate          # first run fetches claude, curl, jq, shellcheck, just, gitleaks (pinned)
 ./setup.sh --key-file ~/.config/openrouter.env
-claude-fusion -g       # already on your PATH inside the env
+claude-openrouter -g       # already on your PATH inside the env
 ```
 
 The environment is defined in `.flox/env/manifest.toml` — edit it and re-`flox activate` to change tools or versions.
@@ -60,8 +60,8 @@ A **mode** decides where the active profile's backend is used. Pick one with `--
 | `extreme` *(default)* | **backend** | **backend** | every tier (Opus/Sonnet/Haiku) + subagents on backend | $$$ |
 
 ```bash
-bin/claude-fusion --mode subagent -p "explain this stack trace"
-claude-fusion modes        # list modes and their exact per-slot models
+bin/claude-openrouter --mode subagent -p "explain this stack trace"
+claude-openrouter modes        # list modes and their exact per-slot models
 ```
 
 ### Customizing modes and the panel
@@ -79,7 +79,7 @@ cp config/modes.json.example config/modes.json
   }
   ```
   ```bash
-  bin/claude-fusion --mode myteam -p "..."
+  bin/claude-openrouter --mode myteam -p "..."
   ```
 - **Change the fusion panel itself** (which models deliberate + the judge), then re-run `./setup.sh`:
   ```jsonc
@@ -110,11 +110,11 @@ Four flavors:
 | **Direct slug** — a raw slug, no profile | `--backend "vendor/model"` | no |
 
 ```bash
-claude-fusion --profile fusion --mode main          # fusion as main + subagents
-claude-fusion --profile deepseek                     # deepseek in every slot (extreme default)
-claude-fusion --profile glm-fireworks                # GLM 5.2 pinned to the Fireworks provider
-claude-fusion --backend "qwen/qwen3-coder-plus"      # raw slug, every slot
-claude-fusion profiles                               # list profiles and their targets
+claude-openrouter --profile fusion --mode main          # fusion as main + subagents
+claude-openrouter --profile deepseek                     # deepseek in every slot (extreme default)
+claude-openrouter --profile glm-fireworks                # GLM 5.2 pinned to the Fireworks provider
+claude-openrouter --backend "qwen/qwen3-coder-plus"      # raw slug, every slot
+claude-openrouter profiles                               # list profiles and their targets
 ```
 
 `--profile` and `--backend` are mutually exclusive. Define profiles in `config/modes.json` (copy `config/modes.json.example`); `default_profile` and `default_mode` set the no-flag behavior.
@@ -122,6 +122,8 @@ claude-fusion profiles                               # list profiles and their t
 **Routing variants & provider pinning.** A `model`-type slug can carry an OpenRouter routing variant — `:nitro` (fastest), `:floor` (cheapest), `:exacto` (quality-first provider) — but a slug *cannot* pin one named provider. To force a single provider (e.g. Fireworks) use a `preset` profile: it bakes `provider: { "only": ["fireworks"] }` into a server-side preset (created by `./setup.sh`) and resolves to `@preset/<slug>`. Before setup runs it falls back to the bare `model` (unpinned).
 
 > **Upgrading from v0.2.x:** preset readiness moved to per-slug markers. Re-run `./setup.sh` once after upgrading; until then fusion profiles use their `fallback` (with a warning).
+>
+> **Upgrading to v0.4.0 (rename):** the project was renamed to **Claude OpenRouter Launcher** (clean break, no aliases). The binary is now **`claude-openrouter`** (was `claude-fusion`), the config env var is **`CLAUDE_OPENROUTER_CONFIG`** (was `CLAUDE_FUSION_CONFIG`), and state lives in **`~/.config/claude-openrouter`** (was `~/.config/claude-fusion`). Re-run `./setup.sh` once so preset markers land in the new state dir; your OpenRouter presets (`cc-fusion`, etc.) are unchanged. If you symlinked the old binary, re-run `make install` / `just install`.
 
 ---
 
@@ -130,9 +132,9 @@ claude-fusion profiles                               # list profiles and their t
 Three ways, in precedence order **`--key` > `--key-file` > `$OPENROUTER_API_KEY`**:
 
 ```bash
-bin/claude-fusion --key sk-or-v1-...             # 1. on the command line
-bin/claude-fusion --key-file ~/.config/or.env    # 2. a file containing OPENROUTER_API_KEY=...
-export OPENROUTER_API_KEY=sk-or-v1-... && bin/claude-fusion   # 3. environment variable
+bin/claude-openrouter --key sk-or-v1-...             # 1. on the command line
+bin/claude-openrouter --key-file ~/.config/or.env    # 2. a file containing OPENROUTER_API_KEY=...
+export OPENROUTER_API_KEY=sk-or-v1-... && bin/claude-openrouter   # 3. environment variable
 ```
 
 Your key is injected only as `ANTHROPIC_AUTH_TOKEN` into the `claude` process (in a subshell) — **never written to disk, never exported into your shell.** Key files are parsed with `sed`, not sourced.
@@ -142,25 +144,25 @@ Your key is injected only as `ANTHROPIC_AUTH_TOKEN` into the `claude` process (i
 ## Commands
 
 ```bash
-claude-fusion -g                              # launch the default mode (no other args needed)
-claude-fusion --profile NAME [args…]          # use a named profile (fusion preset or model alias)
-claude-fusion --backend "vendor/model" [args…]  # use a raw OpenRouter slug directly
-claude-fusion --mode MODE [args…]             # launch a mode; extra args pass through to claude (e.g. -p "…")
-claude-fusion modes                           # list modes and their per-slot models
-claude-fusion profiles                        # list profiles and their targets
-claude-fusion doctor                          # health check: deps, key, credits, preset, env conflicts
-claude-fusion --show-settings                 # print the resolved settings JSON, no launch (alias: --dry-run)
-claude-fusion --cost --mode … -p …            # run, then report what that session cost on OpenRouter
-claude-fusion --help                          # usage
+claude-openrouter -g                              # launch the default mode (no other args needed)
+claude-openrouter --profile NAME [args…]          # use a named profile (fusion preset or model alias)
+claude-openrouter --backend "vendor/model" [args…]  # use a raw OpenRouter slug directly
+claude-openrouter --mode MODE [args…]             # launch a mode; extra args pass through to claude (e.g. -p "…")
+claude-openrouter modes                           # list modes and their per-slot models
+claude-openrouter profiles                        # list profiles and their targets
+claude-openrouter doctor                          # health check: deps, key, credits, preset, env conflicts
+claude-openrouter --show-settings                 # print the resolved settings JSON, no launch (alias: --dry-run)
+claude-openrouter --cost --mode … -p …            # run, then report what that session cost on OpenRouter
+claude-openrouter --help                          # usage
 ```
 
 Repo tasks (run as `make <t>` or `just <t>`): `check` (verify deps) · `lint` (shellcheck) · `test` (no-cost smoke tests) · `setup` · `install` (symlink onto PATH; `PREFIX` overridable) · `hooks` (enable the gitleaks pre-commit hook). `just all` runs lint + tests.
 
 ### Startup connectivity check
 
-Before launching Claude, the launcher runs a fast pre-flight: if OpenRouter is unreachable or your key is rejected, it prints a one-line hint to run `claude-fusion doctor` — so you aren't surprised by cryptic mid-session errors. Silent on success. Disable with `CFL_SKIP_PRECHECK=1`.
+Before launching Claude, the launcher runs a fast pre-flight: if OpenRouter is unreachable or your key is rejected, it prints a one-line hint to run `claude-openrouter doctor` — so you aren't surprised by cryptic mid-session errors. Silent on success. Disable with `COL_SKIP_PRECHECK=1`.
 
-It also **verifies preset-backed profiles**: when the active profile resolves to an `@preset/<slug>` (any `fusion` or `preset` profile whose preset has been set up), the launcher confirms that preset still exists on your account with a free, no-inference `GET /presets/<slug>`. If it's missing or deleted, the launcher aborts before starting Claude with a fix hint (`run ./setup.sh --profile <name>`) instead of failing mid-session. Also skipped by `CFL_SKIP_PRECHECK=1`.
+It also **verifies preset-backed profiles**: when the active profile resolves to an `@preset/<slug>` (any `fusion` or `preset` profile whose preset has been set up), the launcher confirms that preset still exists on your account with a free, no-inference `GET /presets/<slug>`. If it's missing or deleted, the launcher aborts before starting Claude with a fix hint (`run ./setup.sh --profile <name>`) instead of failing mid-session. Also skipped by `COL_SKIP_PRECHECK=1`.
 
 ---
 
@@ -172,13 +174,13 @@ A fusion turn runs several models plus a judge, so it costs and takes more than 
 
 ## Troubleshooting
 
-Run **`claude-fusion doctor`** first — it checks most of these and prints a fix for each.
+Run **`claude-openrouter doctor`** first — it checks most of these and prints a fix for each.
 
 | Symptom | Likely cause / fix |
 |---|---|
 | `preset not set up — using fallback` | You haven't run `./setup.sh` (or switched OpenRouter key/account). Run setup; `doctor` verifies the preset exists for the *current* key. |
 | `OpenRouter rejected the key` | Key wrong/expired, or wrong `--key`/`--key-file`/`OPENROUTER_API_KEY`. |
-| `insufficient credits` / fusion calls fail | Add credits at <https://openrouter.ai/settings/credits>; `doctor` shows your balance. |
+| `insufficient credits` / requests fail | Add credits at <https://openrouter.ai/settings/credits>; `doctor` shows your balance. |
 | `model not found` errors | A panel slug in `config/modes.json` is invalid — check it against <https://openrouter.ai/api/v1/models>. |
 | Claude Code ignores the base URL / "model not found" | A cached Anthropic login or a real `ANTHROPIC_API_KEY` in your shell can interfere. The launcher unsets it per-run; if it persists, `/logout` in Claude Code and unset the key (`doctor` warns if it's set). |
 | `--cost` says "no usage change detected" | OpenRouter billing lagged past the ~30s wait; check <https://openrouter.ai/activity>. |
