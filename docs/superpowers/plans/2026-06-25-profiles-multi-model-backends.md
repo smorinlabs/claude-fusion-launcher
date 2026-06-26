@@ -973,3 +973,17 @@ git commit -m "docs: profiles README section + P03 tracking (v0.3.0)"
 - [ ] Live: `bin/claude-fusion --profile deepseek -p "say hi" --output-format json` → `modelUsage` keyed by `deepseek/deepseek-v3.2`.
 - [ ] Live: `bin/claude-fusion --profile fusion --mode main -p "say hi" --output-format json` → `modelUsage` shows `@preset/cc-fusion`.
 - [ ] Tag/release per repo convention once verified (v0.3.0).
+
+---
+
+## Addendum (2026-06-26) — `preset` profile flavor (added post-plan)
+
+This plan covers the original three flavors (fusion / model / direct slug). A fourth,
+`type: "preset"` (a single model pinned to one provider via a server-side preset that
+bakes in `provider.only`), was added on the same branch after this plan, from a
+follow-up request. It is preset-backed like `fusion`: `setup.sh` creates its preset and
+writes a per-slug marker; the resolver returns `@preset/<slug>` when ready else the
+`fallback` (bare model); the launch pre-flight and `doctor` handle it through the same
+`fusion`/`preset` paths (`cfl_preset_backed_profiles`). Shipped example: `glm-fireworks`.
+Future work derived from this plan should treat `preset` as a first-class profile type
+alongside `fusion`/`model`.

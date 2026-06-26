@@ -232,3 +232,16 @@ New flags: `--profile NAME`, `--backend SLUG`. New subcommand: `profiles`.
   on the marker re-run after upgrade.
 - `PROJECTS.md`: add **Project P03: profiles + multi-model backends (v0.3.0)** with
   tasks/tests mirroring this spec.
+
+## Addendum (2026-06-26) — `preset` profile flavor
+
+After this design was implemented, a **fourth profile flavor** was added on the same
+branch in response to a follow-up request: `type: "preset"`. It is a single model
+pinned to one provider via a server-side OpenRouter preset that bakes in
+`provider.only` (a provider pin can't be expressed as a model-slug suffix, only a
+preset). It resolves like a fusion profile — `@preset/<slug>` once `./setup.sh` has
+created it, else its `fallback` (the bare model). `setup.sh`, the resolver, the launch
+pre-flight, and `doctor` all treat `fusion` and `preset` uniformly as the
+"preset-backed" profiles. Shipped example: `glm-fireworks` (GLM 5.2 → Fireworks). This
+addendum keeps the spec consistent with the shipped contract; the body above describes
+the original three flavors (fusion / model / direct).

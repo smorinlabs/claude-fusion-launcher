@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# setup.sh — creates an OpenRouter preset for each fusion profile in the config.
+# setup.sh — creates an OpenRouter preset for each fusion or preset profile in the config.
 set -euo pipefail
 
 # Resolve $0 through symlinks so setup works no matter where it's invoked from.
@@ -68,7 +68,15 @@ overall_fail=0
 for prof in "${profiles_to_do[@]}"; do
   ptype="$(cfl_profile_type "$prof")"
   # shellcheck disable=SC2016  # $p is a jq variable, not a bash expansion
-  slug="$(cfl_cfg --arg p "$prof" '.profiles[$p].preset_slug')"
+  slug="$(cfl_cfg --arg p "$prof" '.profiles[$p].preset_slug // empty')"
+  if [ -z "$slug" ]; then
+    cfl_warn "profile '$prof' (type $ptype) is missing preset_slug — skipping"
+    overall_fail=1
+    continue
+  fi
+  # Clear any stale readiness marker before we (re)try, so a failed attempt never
+  # leaves a preset looking ready — backend resolution only checks marker existence.
+  rm -f "$CFL_STATE_DIR/presets/$slug.json"
 
   if [ "$ptype" = "fusion" ]; then
     # shellcheck disable=SC2016  # $p is a jq variable, not a bash expansion
@@ -86,7 +94,12 @@ for prof in "${profiles_to_do[@]}"; do
     expect_model="openrouter/fusion"
   else
     # shellcheck disable=SC2016  # $p is a jq variable, not a bash expansion
-    model="$(cfl_cfg --arg p "$prof" '.profiles[$p].model')"
+    model="$(cfl_cfg --arg p "$prof" '.profiles[$p].model // empty')"
+    if [ -z "$model" ]; then
+      cfl_warn "preset profile '$prof' is missing model — skipping"
+      overall_fail=1
+      continue
+    fi
     provider="$(jq -c --arg p "$prof" '.profiles[$p].provider // {}' "$CFL_CONFIG")"
     echo "setup: creating OpenRouter preset '$slug' (profile '$prof', preset)"
     echo "       model: $model"
@@ -107,8 +120,17 @@ for prof in "${profiles_to_do[@]}"; do
   got_model="$(echo "$resp" | jq -r '.data.designated_version.config.model // empty' 2>/dev/null || true)"
   ok=0
   if [ "$ptype" = "fusion" ]; then
+    # Verify the persisted preset matches config on the same fields doctor diffs
+    # (panel + judge + tool_choice), so a silently-rewritten preset isn't marked ready.
     has_tool="$(echo "$resp" | jq -r '[.data.designated_version.config.tools[]?.type] | index("openrouter:fusion") // empty' 2>/dev/null || true)"
-    [ "$got_model" = "$expect_model" ] && [ -n "$has_tool" ] && ok=1
+    live_panel="$(echo "$resp" | jq -r '[.data.designated_version.config.tools[]? | select(.type=="openrouter:fusion").parameters.analysis_models[]?] | join(", ")' 2>/dev/null || true)"
+    live_judge="$(echo "$resp" | jq -r '[.data.designated_version.config.tools[]? | select(.type=="openrouter:fusion").parameters.model][0] // empty' 2>/dev/null || true)"
+    live_tc="$(echo "$resp" | jq -r '.data.designated_version.config.tool_choice // empty' 2>/dev/null || true)"
+    cfg_panel="$(echo "$panel" | jq -r 'join(", ")')"
+    if [ "$got_model" = "$expect_model" ] && [ -n "$has_tool" ] \
+       && [ "$live_panel" = "$cfg_panel" ] && [ "$live_judge" = "$judge" ] && [ "$live_tc" = "required" ]; then
+      ok=1
+    fi
   else
     # Confirm the provider pin actually persisted, not just the model — otherwise a
     # silently-dropped provider would look like success but route unpinned.
@@ -142,6 +164,7 @@ fi
 echo ""
 echo "Next:"
 echo "  bin/claude-fusion profiles                 # list profiles"
-echo "  bin/claude-fusion --profile fusion         # fusion backend, default mode (extreme)"
-echo "  bin/claude-fusion --profile fusion --mode subagent   # fusion only in subagents"
-echo "  bin/claude-fusion --profile deepseek -p \"...\"        # a model-alias profile (no setup needed)"
+for _prof in "${profiles_to_do[@]}"; do
+  echo "  bin/claude-fusion --profile $_prof         # use the profile just set up"
+done
+echo "  bin/claude-fusion --profile <model-alias> -p \"...\"   # model aliases (e.g. deepseek) need no setup"

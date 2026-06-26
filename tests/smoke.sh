@@ -54,8 +54,21 @@ for m in subagent main extreme; do
   fi
 done
 
+# 4b. the settings path is unique per resolved backend (same mode, different profile
+#     or a direct slug must NOT collide on one $mode.json), and the write is atomic.
+p_fusion="$(cfl_render_settings extreme fusion)"
+p_deep="$(cfl_render_settings extreme deepseek)"
+p_direct="$(cfl_render_settings extreme "" "qwen/qwen3-coder-plus")"
+if [ "$p_fusion" != "$p_deep" ] && [ "$p_deep" != "$p_direct" ] && [ "$p_fusion" != "$p_direct" ] \
+  && jq -e . "$p_deep" >/dev/null 2>&1 && jq -e . "$p_direct" >/dev/null 2>&1; then
+  ok "settings path unique per backend"
+else
+  bad "settings path unique per backend" "$(basename "$p_fusion") $(basename "$p_deep") $(basename "$p_direct")"
+fi
+
 # 5. fusion profile resolves to fallback when its preset is NOT set up
-opus_main="$(jq -r '.env.ANTHROPIC_DEFAULT_OPUS_MODEL' "$XDG_CONFIG_HOME/claude-fusion/main.json")"
+out5="$(cfl_render_settings main fusion)"
+opus_main="$(jq -r '.env.ANTHROPIC_DEFAULT_OPUS_MODEL' "$out5")"
 if [ "$opus_main" = "openrouter/fusion" ]; then ok "fusion->fallback (no preset)"; else bad "fusion->fallback (no preset)" "got $opus_main"; fi
 
 # 6. fusion profile resolves to @preset/<slug> once the per-slug marker exists
@@ -357,9 +370,10 @@ case "$url" in
   */key) printf '{"data":{"label":"smoke"}}' ;;
   */credits) printf '{"data":{"total_credits":10,"total_usage":1}}' ;;
   */presets/*/chat/completions)
-    m="$(printf '%s' "$body" | jq -r '.model // "openrouter/fusion"')"
-    prov="$(printf '%s' "$body" | jq -c '.provider // {}')"
-    printf '{"data":{"designated_version":{"config":{"model":"%s","provider":%s,"tools":[{"type":"openrouter:fusion"}]}}}}' "$m" "$prov" ;;
+    # Echo the posted config back verbatim (model, provider, tools, tool_choice) so
+    # both the fusion field-verification and the preset provider check see a match.
+    cfg="$(printf '%s' "$body" | jq -c '{model, provider:(.provider//{}), tools:(.tools//[]), tool_choice:(.tool_choice//null)}')"
+    printf '{"data":{"designated_version":{"config":%s}}}' "$cfg" ;;
   *) printf '{"error":{"message":"unexpected URL"}}' ;;
 esac
 EOS
@@ -420,6 +434,19 @@ else
   bad "setup creates provider-pinned preset" "rc=$preset_rc"
 fi
 
+# 22e. A preset-backed profile missing preset_slug is skipped with a warning and a
+#      non-zero exit, and writes no marker (no POST to /presets//chat/completions).
+badcfg="$(mktemp)"
+jq '.profiles["broken"] = {"type":"fusion","panel_models":["deepseek/deepseek-v3.2"],"judge_model":"deepseek/deepseek-v3.2"}' "$CFL_CONFIG" > "$badcfg"
+badslug_out="$(PATH="$presetbin:$PATH" XDG_CONFIG_HOME="$tmpstate/setup-badslug" CLAUDE_FUSION_CONFIG="$badcfg" ./setup.sh --profile broken --key test 2>&1)"
+badslug_rc=$?
+if [ "$badslug_rc" -ne 0 ] && [[ "$badslug_out" == *"missing preset_slug"* ]] && [ ! -e "$tmpstate/setup-badslug/claude-fusion/presets/null.json" ]; then
+  ok "setup rejects missing preset_slug"
+else
+  bad "setup rejects missing preset_slug" "rc=$badslug_rc $badslug_out"
+fi
+rm -f "$badcfg"
+
 # 23. gitleaks hook falls back to the older protect --staged syntax.
 gitleaksbin="$tmpstate/gitleaksbin"; mkdir -p "$gitleaksbin"
 gitleaks_log="$tmpstate/gitleaks.log"
@@ -464,7 +491,7 @@ fi
 
 default_argv_out="$tmpstate/default-claude-argv.txt"
 if PATH="$fakebin:$PATH" CLAUDE_ARGV_OUT="$default_argv_out" CFL_SKIP_PRECHECK=1 OPENROUTER_API_KEY=test just --quiet run >/dev/null 2>&1 \
-  && grep -Eq '/extreme\.json$' "$default_argv_out"; then
+  && grep -Eq '/fusion-extreme\.json$' "$default_argv_out"; then
   ok "just run defaults to extreme"
 else
   bad "just run defaults to extreme" "$(tr '\n' ' ' < "$default_argv_out" 2>/dev/null || true)"
@@ -594,6 +621,27 @@ if [ "$chk3_rc" -eq 0 ] && [[ "$chk3_out" == *"couldn't verify preset"* && "$chk
   ok "preflight warns (not abort) on network error"
 else
   bad "preflight warns (not abort) on network error" "rc=$chk3_rc $chk3_out"
+fi
+
+# 27d. A retryable HTTP status (503) is treated as transient (warn + proceed), NOT as
+#      a missing preset — so an OpenRouter-side blip doesn't tell users to re-run setup.
+cat > "$chkbin/curl" <<'EOS'
+#!/usr/bin/env bash
+url=""
+for arg in "$@"; do case "$arg" in https://*) url="$arg" ;; esac; done
+case "$url" in
+  */api/v1/key) exit 0 ;;
+  */presets/*) printf '503' ;;     # transient server error -> unknown, not "missing"
+  *) exit 0 ;;
+esac
+EOS
+chmod +x "$chkbin/curl"
+chk4_out="$(PATH="$chkbin:$fakebin:$PATH" XDG_CONFIG_HOME="$chk_state" bin/claude-fusion --profile glm-fireworks --key test -p hi 2>&1)"
+chk4_rc=$?
+if [ "$chk4_rc" -eq 0 ] && [[ "$chk4_out" == *"couldn't verify preset"* && "$chk4_out" != *"not available on your OpenRouter account"* ]]; then
+  ok "preflight treats 5xx as transient"
+else
+  bad "preflight treats 5xx as transient" "rc=$chk4_rc $chk4_out"
 fi
 
 echo "----"

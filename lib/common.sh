@@ -70,7 +70,7 @@ cfl_resolve_mode() {
   if [ -n "$m" ]; then printf '%s' "$m"; else printf 'extreme'; fi
 }
 
-# cfl_profile_type <profile> — "fusion" | "model" | "" (unknown).
+# cfl_profile_type <profile> — "fusion" | "model" | "preset" | "" (unknown).
 # shellcheck disable=SC2016  # $p is a jq variable, not a bash expansion
 cfl_profile_type() { cfl_cfg --arg p "$1" '.profiles[$p].type // empty'; }
 
@@ -120,11 +120,33 @@ cfl_backend_ref() {
 # cfl_list_profiles — print the profiles with their resolved targets.
 cfl_list_profiles() {
   echo "Profiles (config: $CFL_CONFIG):"
-  jq -r '.profiles | to_entries[]
-    | if   .value.type=="fusion" then "  \(.key) (fusion): @preset/\(.value.preset_slug) — \(.value.panel_models|length)-model panel, judge \(.value.judge_model)"
-      elif .value.type=="preset" then "  \(.key) (preset): @preset/\(.value.preset_slug) — \(.value.model) via provider \((.value.provider.only // .value.provider.order // []) | join(", "))"
-      elif .value.type=="model"  then "  \(.key) (model): \(.value.model)"
-      else "  \(.key) (unknown type)" end' "$CFL_CONFIG"
+  # Show the ACTUAL resolved backend (via cfl_profile_backend_ref), so a preset
+  # that hasn't been set up reports its fallback (e.g. openrouter/fusion or the bare
+  # model) — what launch will really use — instead of a misleading @preset/<slug>.
+  local name type ref panel_len judge model prov
+  while IFS= read -r name; do
+    [ -n "$name" ] || continue
+    type="$(cfl_profile_type "$name")"
+    ref="$(cfl_profile_backend_ref "$name")"
+    case "$type" in
+      fusion)
+        # shellcheck disable=SC2016  # $p is a jq variable, not a bash expansion
+        panel_len="$(cfl_cfg --arg p "$name" '.profiles[$p].panel_models | length')"
+        # shellcheck disable=SC2016  # $p is a jq variable, not a bash expansion
+        judge="$(cfl_cfg --arg p "$name" '.profiles[$p].judge_model')"
+        printf '  %s (fusion): %s — %s-model panel, judge %s\n' "$name" "$ref" "$panel_len" "$judge"
+        ;;
+      preset)
+        # shellcheck disable=SC2016  # $p is a jq variable, not a bash expansion
+        model="$(cfl_cfg --arg p "$name" '.profiles[$p].model')"
+        # shellcheck disable=SC2016  # $p is a jq variable, not a bash expansion
+        prov="$(cfl_cfg --arg p "$name" '.profiles[$p].provider | (.only // .order // []) | join(", ")')"
+        printf '  %s (preset): %s — %s via provider %s\n' "$name" "$ref" "$model" "$prov"
+        ;;
+      model)  printf '  %s (model): %s\n' "$name" "$ref" ;;
+      *)      printf '  %s (unknown type)\n' "$name" ;;
+    esac
+  done < <(cfl_cfg '.profiles | keys[]')
   printf '  default_profile: %s   default_mode: %s\n' "$(cfl_cfg '.default_profile // "—"')" "$(cfl_cfg '.default_mode // "extreme"')"
 }
 
@@ -132,12 +154,19 @@ cfl_list_profiles() {
 # settings JSON for the mode against the resolved backend, and print its path.
 # The literal "backend" in any slot resolves to cfl_backend_ref.
 cfl_render_settings() {
-  local mode="$1" profile="${2:-}" direct="${3:-}" fref out modeobj
+  local mode="$1" profile="${2:-}" direct="${3:-}" fref out tmp key modeobj
   modeobj="$(jq -c --arg m "$mode" '.modes[$m] // empty' "$CFL_CONFIG")"
   [ -n "$modeobj" ] || cfl_die "unknown mode '$mode' — available: $(cfl_cfg '.modes | keys | join(", ")')"
   fref="$(cfl_backend_ref "$profile" "$direct")"
   mkdir -p "$CFL_STATE_DIR"
-  out="$CFL_STATE_DIR/$mode.json"
+  # Key the settings file on the resolved backend (profile name, or a sanitized
+  # direct slug) AND the mode, so concurrent invocations with different profiles
+  # don't clobber each other's settings on a shared "$mode.json".
+  if   [ -n "$profile" ]; then key="$profile"
+  elif [ -n "$direct" ];  then key="direct-$(printf '%s' "$direct" | tr -c 'a-zA-Z0-9._-' '_')"
+  else key="$mode"; fi
+  out="$CFL_STATE_DIR/$key-$mode.json"
+  tmp="$(mktemp "$CFL_STATE_DIR/.render.XXXXXX")"
   jq -n --arg fref "$fref" --argjson m "$modeobj" '
     def res(v): if v == "backend" then $fref else v end;
     {
@@ -157,7 +186,10 @@ cfl_render_settings() {
         + (if $m.haiku    != null then {"ANTHROPIC_DEFAULT_HAIKU_MODEL":  res($m.haiku)}    else {} end)
         + (if $m.subagent != null then {"CLAUDE_CODE_SUBAGENT_MODEL":     res($m.subagent)} else {} end)
       )
-    }' > "$out"
+    }' > "$tmp"
+  # Atomic publish: a concurrent reader (or another session) never sees a
+  # half-written settings file — it sees either the old file or the complete new one.
+  mv -f "$tmp" "$out"
   printf '%s' "$out"
 }
 
@@ -169,20 +201,20 @@ cfl_or_get() { curl -fsS --connect-timeout 5 --max-time 15 "$OR_API/$2" -H "Auth
 # cfl_credits_usage <key> — print cumulative account usage ($) as a number.
 cfl_credits_usage() { cfl_or_get "$1" "credits" | jq -r '.data.total_usage // empty'; }
 
-# cfl_preset_check <key> <slug> — pre-flight preset existence check. Distinguishes
-# a missing preset (HTTP error) from a transient network failure so the launcher
-# only hard-aborts on the former. Returns:
+# cfl_preset_check <key> <slug> — pre-flight preset existence check. Separates a
+# genuinely-missing preset from a transient failure so the launcher only hard-aborts
+# on the former. Returns:
 #   0 = preset exists (HTTP 2xx)
-#   1 = HTTP error (e.g. 404) — preset not available on this account
-#   2 = transport/network error (no HTTP response) — existence unknown
+#   1 = preset not found (4xx that isn't transient, e.g. 404/401/403)
+#   2 = unknown — transport error or a retryable HTTP status (000/408/429/5xx)
 cfl_preset_check() {
   local code
   code="$(curl -sS -o /dev/null -w '%{http_code}' --connect-timeout 5 --max-time 15 \
     "$OR_API/presets/$2" -H "Authorization: Bearer $1" 2>/dev/null)" || true
   case "$code" in
-    2*)      return 0 ;;
-    ''|000)  return 2 ;;
-    *)       return 1 ;;
+    2*)                 return 0 ;;
+    ''|000|408|429|5*)  return 2 ;;
+    *)                  return 1 ;;
   esac
 }
 
