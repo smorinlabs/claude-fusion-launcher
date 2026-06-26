@@ -139,12 +139,34 @@ rm -f "$lns"
 modes_out="$(bin/claude-fusion modes 2>/dev/null || true)"
 case "$modes_out" in *"subagent:"*) ok "modes subcommand" ;; *) bad "modes subcommand" ;; esac
 
-# 14. --show-settings renders valid JSON without a key or claude
-ss_json="$(bin/claude-fusion --show-settings --mode main 2>/dev/null | sed -n '/^----$/,$p' | tail -n +2)"
-if printf '%s' "$ss_json" | jq -e '.env.ANTHROPIC_DEFAULT_OPUS_MODEL' >/dev/null 2>&1; then ok "--show-settings renders JSON"; else bad "--show-settings renders JSON"; fi
+# 13b. 'profiles' subcommand lists profiles + targets
+profiles_out="$(bin/claude-fusion profiles 2>/dev/null || true)"
+case "$profiles_out" in *"fusion (fusion):"*) ok "profiles subcommand" ;; *) bad "profiles subcommand" "$profiles_out" ;; esac
+
+# 14. --show-settings renders valid JSON and reports the active profile
+ss_out="$(bin/claude-fusion --show-settings --profile fusion --mode main 2>/dev/null || true)"
+ss_json="$(printf '%s' "$ss_out" | sed -n '/^----$/,$p' | tail -n +2)"
+if printf '%s' "$ss_json" | jq -e '.env.ANTHROPIC_DEFAULT_OPUS_MODEL' >/dev/null 2>&1 \
+  && [[ "$ss_out" == *"profile:"* ]]; then ok "--show-settings renders JSON"; else bad "--show-settings renders JSON" "$ss_out"; fi
 
 # 14b. unknown modes must fail instead of silently rendering defaults
 if bin/claude-fusion --show-settings --mode bogus >/dev/null 2>&1; then bad "unknown mode rejected"; else ok "unknown mode rejected"; fi
+
+# 14c. --backend uses the raw slug in all slots under the default (extreme) mode
+be_out="$(bin/claude-fusion --show-settings --backend "qwen/qwen3-coder-plus" 2>/dev/null || true)"
+be_json="$(printf '%s' "$be_out" | sed -n '/^----$/,$p' | tail -n +2)"
+be_default="$(printf '%s' "$be_json" | jq -r '.model')"
+be_sub="$(printf '%s' "$be_json" | jq -r '.env.CLAUDE_CODE_SUBAGENT_MODEL')"
+if [ "$be_default" = "qwen/qwen3-coder-plus" ] && [ "$be_sub" = "qwen/qwen3-coder-plus" ]; then ok "--backend fills all slots (extreme default)"; else bad "--backend fills all slots" "default=$be_default sub=$be_sub"; fi
+
+# 14d. --profile model alias resolves in all slots under default mode
+ds_out="$(bin/claude-fusion --show-settings --profile deepseek 2>/dev/null || true)"
+ds_json="$(printf '%s' "$ds_out" | sed -n '/^----$/,$p' | tail -n +2)"
+ds_default="$(printf '%s' "$ds_json" | jq -r '.model')"
+if [ "$ds_default" = "deepseek/deepseek-v3.2" ]; then ok "--profile model alias resolves"; else bad "--profile model alias resolves" "$ds_default"; fi
+
+# 14e. --profile and --backend together is an error
+if bin/claude-fusion --show-settings --profile fusion --backend foo >/dev/null 2>&1; then bad "profile+backend mutually exclusive"; else ok "profile+backend mutually exclusive"; fi
 
 # 15. no args (non-TTY) prints help and exits 0
 if out_help="$(bin/claude-fusion </dev/null 2>&1)" && printf '%s' "$out_help" | grep -q 'claude-fusion'; then ok "no-args help (exit 0)"; else bad "no-args help"; fi
@@ -387,10 +409,10 @@ fi
 
 default_argv_out="$tmpstate/default-claude-argv.txt"
 if PATH="$fakebin:$PATH" CLAUDE_ARGV_OUT="$default_argv_out" CFL_SKIP_PRECHECK=1 OPENROUTER_API_KEY=test just --quiet run >/dev/null 2>&1 \
-  && grep -Eq '/main\.json$' "$default_argv_out"; then
-  ok "just run defaults to main"
+  && grep -Eq '/extreme\.json$' "$default_argv_out"; then
+  ok "just run defaults to extreme"
 else
-  bad "just run defaults to main" "$(tr '\n' ' ' < "$default_argv_out" 2>/dev/null || true)"
+  bad "just run defaults to extreme" "$(tr '\n' ' ' < "$default_argv_out" 2>/dev/null || true)"
 fi
 
 setup_dry="$(just --dry-run setup --key-file "space path" 2>&1 || true)"

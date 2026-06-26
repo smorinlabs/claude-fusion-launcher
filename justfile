@@ -25,8 +25,8 @@ all: lint test
 setup *args:
     ./setup.sh "$@"
 
-# run Claude Code with a fusion mode (default: main). e.g. `just run main -p "hi"`
-run mode="main" *args:
+# run Claude Code with a mode (default: extreme). e.g. `just run main -p "hi"`
+run mode="extreme" *args:
     mode="$1"; shift; bin/claude-fusion --mode "$mode" "$@"
 
 # list available modes

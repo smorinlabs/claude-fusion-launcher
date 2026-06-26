@@ -16,30 +16,34 @@ CFL_ROOT="$(cd -P "$(dirname "$_src")/.." && pwd)"
 # shellcheck source=lib/common.sh
 . "$CFL_ROOT/lib/common.sh"
 
-# Default = fusion as the main model AND in subagents (you're here for fusion).
-# Lighter alternatives: 'subagent' (Opus main, fusion subagents only), 'extreme' (all tiers fusion).
-DEFAULT_MODE="main"
+# Default = the configured default_mode (extreme): the active backend in every slot.
+DEFAULT_MODE="extreme"
 
 usage() {
   cat <<EOF
-claude-fusion — run Claude Code through OpenRouter Fusion.
+claude-fusion — run Claude Code through OpenRouter, on a profile + mode.
 
 Quick start:
-  claude-fusion -g                     launch the default mode ($DEFAULT_MODE)
-  claude-fusion --mode MODE [args…]    launch a mode; extra args go to claude (e.g. -p "…")
-  claude-fusion modes                  list modes
-  claude-fusion doctor                 health checks (deps, key, credits, preset)
+  claude-fusion -g                       launch defaults (profile + mode: $DEFAULT_MODE)
+  claude-fusion --profile NAME [args…]   pick a backend profile; extra args go to claude
+  claude-fusion --backend SLUG [args…]   use a raw OpenRouter slug (no named profile)
+  claude-fusion --mode MODE [args…]      pick where the backend goes (see 'modes')
+  claude-fusion profiles                 list profiles
+  claude-fusion modes                    list modes
+  claude-fusion doctor                   health checks (deps, key, credits, presets)
 
 Options:
-  -g, --go                 launch the default mode ($DEFAULT_MODE), no extra args needed
-  --mode MODE              fusion mode (default: $DEFAULT_MODE) — see 'claude-fusion modes'
+  -g, --go                 launch the defaults, no extra args needed
+  --profile NAME           backend profile (default: config .default_profile)
+  --backend SLUG           raw OpenRouter model slug (mutually exclusive with --profile)
+  --mode MODE              where the backend goes (default: $DEFAULT_MODE)
   --key KEY                OpenRouter key      (precedence: --key > --key-file > \$OPENROUTER_API_KEY)
   --key-file FILE          file with OPENROUTER_API_KEY=…
-  --show-settings, --dry-run   print the resolved settings and exit (no launch)
-  --cost                   report OpenRouter spend for the session (waits briefly for billing to settle)
+  --show-settings, --dry-run   print the resolved profile/backend/settings and exit
+  --cost                   report OpenRouter spend for the session
   -h, --help               this help
 
-Run ./setup.sh once to create your custom-panel preset (otherwise the fallback panel is used).
+Run ./setup.sh once to create your fusion profiles' presets (otherwise the fallback is used).
 EOF
 }
 
@@ -81,10 +85,20 @@ case "${1:-}" in
     cfl_list_modes
     exit 0
     ;;
+  profiles)
+    cfl_require jq
+    cfl_load_config
+    cfl_list_profiles
+    exit 0
+    ;;
 esac
 
 # ---------- launcher ----------
-mode="$DEFAULT_MODE"
+mode=""
+profile=""
+backend=""
+profile_set=0
+backend_set=0
 key=""
 keyfile=""
 go=0
@@ -96,6 +110,10 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --mode) mode="${2:?--mode needs a value}"; mode_set=1; shift 2;;
     --mode=*) mode="${1#*=}"; mode_set=1; shift;;
+    --profile) profile="${2:?--profile needs a value}"; profile_set=1; shift 2;;
+    --profile=*) profile="${1#*=}"; profile_set=1; shift;;
+    --backend) backend="${2:?--backend needs a value}"; backend_set=1; shift 2;;
+    --backend=*) backend="${1#*=}"; backend_set=1; shift;;
     -g|--go) go=1; shift;;
     --key) key="${2:?--key needs a value}"; shift 2;;
     --key=*) key="${1#*=}"; shift;;
@@ -109,11 +127,16 @@ while [ $# -gt 0 ]; do
   esac
 done
 
+if [ "$profile_set" -eq 1 ] && [ "$backend_set" -eq 1 ]; then
+  cfl_die "--profile and --backend are mutually exclusive (a raw --backend slug has no named profile)"
+fi
+
 # No actionable input -> minimal help; on a TTY, offer to just go.
-if [ "$go" -eq 0 ] && [ "$mode_set" -eq 0 ] && [ "$show" -eq 0 ] && [ ${#args[@]} -eq 0 ]; then
+if [ "$go" -eq 0 ] && [ "$mode_set" -eq 0 ] && [ "$show" -eq 0 ] \
+   && [ "$profile_set" -eq 0 ] && [ "$backend_set" -eq 0 ] && [ ${#args[@]} -eq 0 ]; then
   usage
   if [ -t 0 ] && [ -t 1 ]; then
-    printf "\nStart now in the default mode '%s'? [y/N] " "$mode"
+    printf "\nStart now with the defaults (profile from config, mode '%s')? [y/N] " "$DEFAULT_MODE"
     read -r _ans || _ans=""
     case "$_ans" in [yY]|[yY][eE][sS]) ;; *) exit 0 ;; esac
   else
@@ -123,13 +146,22 @@ fi
 
 cfl_require jq
 cfl_load_config
-settings="$(cfl_render_settings "$mode")"
+mode="$(cfl_resolve_mode "$mode")"
+if [ "$backend_set" -eq 0 ]; then
+  profile="$(cfl_resolve_profile "$profile")"
+fi
+settings="$(cfl_render_settings "$mode" "$profile" "$backend")"
 
 # Dry run: show what would launch, no key needed, no claude needed.
 if [ "$show" -eq 1 ]; then
   echo "mode:       $mode"
+  if [ "$backend_set" -eq 1 ]; then
+    echo "profile:    (none — direct --backend)"
+  else
+    echo "profile:    $profile ($(cfl_profile_type "$profile"))"
+  fi
   echo "config:     $CFL_CONFIG"
-  echo "fusion ref: $(cfl_fusion_ref)"
+  echo "backend:    $(cfl_backend_ref "$profile" "$backend")"
   echo "settings:   $settings"
   echo "----"
   jq . "$settings"
@@ -138,7 +170,12 @@ fi
 
 cfl_require claude curl
 key="$(cfl_resolve_key "$key" "$keyfile")"
-cfl_preset_ready || cfl_warn "preset not set up for slug '$(cfl_cfg '.preset_slug')' — using fallback '$(cfl_cfg '.fallback // "openrouter/fusion"')'. Run ./setup.sh for your custom panel."
+if [ "$backend_set" -eq 0 ] && [ "$(cfl_profile_type "$profile")" = "fusion" ]; then
+  # shellcheck disable=SC2016  # $p is a jq variable, not a bash expansion
+  pslug="$(cfl_cfg --arg p "$profile" '.profiles[$p].preset_slug // empty')"
+  # shellcheck disable=SC2016  # $p is a jq variable, not a bash expansion
+  cfl_preset_ready "$pslug" || cfl_warn "preset not set up for profile '$profile' (slug '$pslug') — using fallback '$(cfl_cfg --arg p "$profile" '.profiles[$p].fallback // "openrouter/fusion"')'. Run ./setup.sh."
+fi
 
 # Pre-flight: warn early (with a doctor hint) if OpenRouter is unreachable or the
 # key is rejected — otherwise the user only finds out via cryptic mid-session errors.
